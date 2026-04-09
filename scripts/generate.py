@@ -308,8 +308,31 @@ def save_raw_response(raw: str):
     logger.info(f"Saved raw response to {raw_path}")
 
 
-def build_site() -> bool:
-    """Run Hugo to build the site."""
+def validate_build(date_str: str) -> bool:
+    """Verify Hugo output after build: key files exist and are non-empty."""
+    public_dir = PROJECT_ROOT / "public"
+    checks = {
+        "index": public_dir / "index.html",
+        "post": public_dir / "posts" / date_str / "index.html",
+        "feed": public_dir / "feed.xml",
+    }
+
+    all_ok = True
+    for name, path in checks.items():
+        if not path.exists():
+            logger.error(f"Build validation failed: {name} missing at {path}")
+            all_ok = False
+        elif path.stat().st_size == 0:
+            logger.error(f"Build validation failed: {name} is 0 bytes at {path}")
+            all_ok = False
+        else:
+            logger.info(f"Build validated: {name} ({path.stat().st_size} bytes)")
+
+    return all_ok
+
+
+def build_site(date_str: str) -> bool:
+    """Run Hugo to build the site and validate output."""
     try:
         result = subprocess.run(
             ["hugo", "--minify"],
@@ -318,12 +341,17 @@ def build_site() -> bool:
             text=True,
             timeout=60,
         )
-        if result.returncode == 0:
-            logger.info("Hugo build succeeded")
-            return True
-        else:
+        if result.returncode != 0:
             logger.error(f"Hugo build failed: {result.stderr}")
             return False
+
+        logger.info("Hugo build succeeded")
+
+        if not validate_build(date_str):
+            logger.error("Hugo build output validation failed — not committing")
+            return False
+
+        return True
     except Exception as e:
         logger.error(f"Hugo build error: {e}")
         return False
@@ -479,7 +507,7 @@ def main():
     # Stage 4: Build site
     if completed_idx < 3:
         logger.info("Step 5: Building site...")
-        if not build_site():
+        if not build_site(today):
             notify_failure("Hugo build failed")
             return
         save_state(today, "built")
