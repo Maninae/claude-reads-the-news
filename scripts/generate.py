@@ -357,41 +357,97 @@ def build_site(date_str: str) -> bool:
         return False
 
 
+GIT_PUSH_RETRIES = 2
+
+
+def _run_git(*args, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run a git command and return the result."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
 def git_commit_and_push(filepath: Path) -> bool:
-    """Commit the new entry and push to GitHub."""
+    """Commit the new entry and push to GitHub.
+
+    Pulls with rebase before pushing to handle remote changes.
+    Retries push once if it fails due to remote updates during the operation.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        subprocess.run(
-            ["git", "add", "content/posts/", "data/"],
+        _run_git("add", "content/posts/", "data/")
+        # Check if there are staged changes before committing
+        status = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
             cwd=PROJECT_ROOT,
-            check=True,
             capture_output=True,
         )
-
-        subprocess.run(
-            ["git", "commit", "-m", f"entry: {today}"],
-            cwd=PROJECT_ROOT,
-            check=True,
-            capture_output=True,
-        )
-
-        subprocess.run(
-            ["git", "push"],
-            cwd=PROJECT_ROOT,
-            check=True,
-            capture_output=True,
-            timeout=30,
-        )
-
-        logger.info("Committed and pushed to GitHub")
-        return True
+        if status.returncode != 0:
+            _run_git("commit", "-m", f"entry: {today}")
+        else:
+            logger.info("Nothing to commit — commit already exists, proceeding to push")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Git operation failed: {e.stderr}")
+        logger.error(f"Git commit failed: {e.stderr}")
         return False
     except Exception as e:
-        logger.error(f"Git error: {e}")
+        logger.error(f"Git commit error: {e}")
         return False
+
+    # Pull with rebase then push, with retry for race conditions
+    for attempt in range(1, GIT_PUSH_RETRIES + 1):
+        try:
+            # Pull remote changes and rebase our commit on top
+            try:
+                result = _run_git("pull", "--rebase", timeout=30)
+                if result.stdout.strip():
+                    logger.info(f"Git pull: {result.stdout.strip()}")
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if "CONFLICT" in stderr or "could not apply" in stderr:
+                    logger.error(
+                        f"Git rebase conflict — aborting rebase and failing. "
+                        f"Manual resolution needed: {stderr}"
+                    )
+                    # Abort the rebase to leave the repo in a clean state
+                    try:
+                        _run_git("rebase", "--abort")
+                    except subprocess.CalledProcessError:
+                        pass
+                    return False
+                # Other pull errors (e.g., no remote configured)
+                logger.warning(f"Git pull failed (attempt {attempt}): {stderr}")
+                if attempt >= GIT_PUSH_RETRIES:
+                    return False
+                continue
+
+            _run_git("push", timeout=30)
+            logger.info("Committed and pushed to GitHub")
+            return True
+
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr or ""
+            if "rejected" in stderr or "failed to push" in stderr.lower():
+                logger.warning(
+                    f"Push rejected (attempt {attempt}/{GIT_PUSH_RETRIES}), "
+                    f"will retry with pull --rebase"
+                )
+                if attempt >= GIT_PUSH_RETRIES:
+                    logger.error(f"Push failed after {GIT_PUSH_RETRIES} attempts: {stderr}")
+                    return False
+                continue
+            logger.error(f"Git push failed: {stderr}")
+            return False
+        except Exception as e:
+            logger.error(f"Git push error: {e}")
+            return False
+
+    return False
 
 
 def notify_failure(error: str):
