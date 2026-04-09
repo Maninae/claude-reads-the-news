@@ -10,7 +10,7 @@ import logging.handlers
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -55,11 +55,117 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+PIPELINE_STAGES = ["fetched", "generated", "saved", "built", "pushed"]
+
+
+def _state_path(date_str: str) -> Path:
+    """Return the path to today's pipeline state file."""
+    return DATA_DIR / f"{date_str}-state.json"
+
+
+def load_state(date_str: str) -> dict:
+    """Load pipeline state for a given date. Returns empty dict if none."""
+    path = _state_path(date_str)
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_state(date_str: str, stage: str, **extra) -> None:
+    """Mark a pipeline stage as complete, preserving earlier state."""
+    state = load_state(date_str)
+    state["stage"] = stage
+    state["updated"] = datetime.now().isoformat()
+    state.update(extra)
+    try:
+        _state_path(date_str).write_text(json.dumps(state, indent=2) + "\n")
+    except OSError as e:
+        logger.warning(f"Could not write state file: {e}")
+
+
+def _news_cache_path(date_str: str) -> Path:
+    """Path for cached news article metadata."""
+    return DATA_DIR / f"{date_str}-news.json"
+
+
+def save_news_cache(date_str: str, news: dict[str, list[Article]]) -> None:
+    """Persist fetched article metadata so resume doesn't need to re-fetch."""
+    cache = {}
+    for category, articles in news.items():
+        cache[category] = [
+            {
+                "title": a.title,
+                "summary": a.summary,
+                "url": a.url,
+                "source": a.source,
+                "category": a.category,
+                "full_text": a.full_text,
+            }
+            for a in articles
+        ]
+    try:
+        _news_cache_path(date_str).write_text(json.dumps(cache, indent=2) + "\n")
+    except OSError as e:
+        logger.warning(f"Could not write news cache: {e}")
+
+
+def load_news_cache(date_str: str) -> dict[str, list[Article]] | None:
+    """Load cached news articles from disk. Returns None if unavailable."""
+    path = _news_cache_path(date_str)
+    if not path.exists():
+        return None
+    try:
+        cache = json.loads(path.read_text())
+        news: dict[str, list[Article]] = {}
+        for category, articles in cache.items():
+            news[category] = [
+                Article(
+                    title=a["title"],
+                    summary=a["summary"],
+                    url=a["url"],
+                    source=a["source"],
+                    category=a["category"],
+                    full_text=a.get("full_text", ""),
+                )
+                for a in articles
+            ]
+        return news
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        logger.warning(f"Could not load news cache: {e}")
+        return None
+
+
+def cleanup_old_state_files(keep_days: int = 30) -> None:
+    """Remove state/cache files older than keep_days."""
+    if not DATA_DIR.exists():
+        return
+    cutoff = datetime.now() - timedelta(days=keep_days)
+    for pattern in ("*-state.json", "*-news.json", "*-raw.md"):
+        for path in DATA_DIR.glob(pattern):
+            try:
+                # Extract date from filename (YYYY-MM-DD-suffix)
+                date_str = path.stem.rsplit("-", 1)[0]
+                # For -raw and -news, stem is like 2026-04-09-raw
+                # For -state, stem is like 2026-04-09-state
+                # Extract the YYYY-MM-DD part
+                date_part = "-".join(date_str.split("-")[:3])
+                file_date = datetime.strptime(date_part, "%Y-%m-%d")
+                if file_date < cutoff:
+                    path.unlink()
+                    logger.info(f"Cleaned up old file: {path.name}")
+            except (ValueError, IndexError):
+                continue
+
+
 def ensure_dirs():
-    """Create necessary directories."""
+    """Create necessary directories and clean up old state files."""
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_old_state_files()
 
 
 def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
@@ -271,66 +377,123 @@ def notify_failure(error: str):
 
 
 def main():
-    """Main daily generation pipeline."""
+    """Main daily generation pipeline.
+
+    Uses a state file (data/YYYY-MM-DD-state.json) to track progress through
+    pipeline stages: fetched → generated → saved → built → pushed.
+    Safe to re-run: resumes from the last completed stage.
+    """
     logger.info("=" * 60)
     logger.info("The Watcher — Daily Generation")
     logger.info("=" * 60)
 
     ensure_dirs()
 
-    # Check if today's entry already exists
     today = datetime.now().strftime("%Y-%m-%d")
-    if (CONTENT_DIR / f"{today}.md").exists():
-        logger.info(f"Entry for {today} already exists. Skipping.")
+    state = load_state(today)
+    current_stage = state.get("stage", "")
+
+    # Already fully complete
+    if current_stage == "pushed":
+        logger.info(f"Entry for {today} already published. Skipping.")
         return
 
-    # Step 1: Fetch news
-    logger.info("Step 1: Fetching news...")
-    try:
-        news = fetch_all_news()
-        news_content = format_news_for_prompt(news)
-        if not news_content.strip():
-            notify_failure("No news content fetched from any source")
+    if current_stage:
+        logger.info(f"Resuming from stage '{current_stage}' for {today}")
+
+    # Determine which stage index we've completed (-1 = none)
+    completed_idx = (
+        PIPELINE_STAGES.index(current_stage) if current_stage in PIPELINE_STAGES else -1
+    )
+
+    # Stage 1: Fetch news
+    if completed_idx < 0:
+        logger.info("Step 1: Fetching news...")
+        try:
+            news = fetch_all_news()
+            news_content = format_news_for_prompt(news)
+            if not news_content.strip():
+                notify_failure("No news content fetched from any source")
+                return
+            logger.info(f"Fetched {len(news_content)} chars of news content")
+            save_news_cache(today, news)
+            save_state(today, "fetched")
+        except Exception as e:
+            notify_failure(f"News fetch failed: {e}")
             return
-        logger.info(f"Fetched {len(news_content)} chars of news content")
-    except Exception as e:
-        notify_failure(f"News fetch failed: {e}")
-        return
+    else:
+        logger.info("Step 1: Fetch — already done, loading from cache.")
+        news = load_news_cache(today)
+        if news is not None:
+            news_content = format_news_for_prompt(news)
+        else:
+            logger.warning("News cache missing — re-fetching")
+            try:
+                news = fetch_all_news()
+                news_content = format_news_for_prompt(news)
+                save_news_cache(today, news)
+            except Exception as e:
+                notify_failure(f"News re-fetch on resume failed: {e}")
+                return
 
-    # Step 2: Load previous entries for continuity
-    logger.info("Step 2: Loading previous entries...")
-    previous_entries = get_previous_entries()
+    # Stage 2: Generate reflection
+    if completed_idx < 1:
+        logger.info("Step 2: Loading previous entries...")
+        previous_entries = get_previous_entries()
 
-    # Step 3: Generate reflection
-    logger.info("Step 3: Generating reflection...")
-    try:
-        raw_response = generate_reflection(news_content, previous_entries)
-        save_raw_response(raw_response)
-    except Exception as e:
-        notify_failure(f"Claude API call failed: {e}")
-        return
+        logger.info("Step 3: Generating reflection...")
+        try:
+            raw_response = generate_reflection(news_content, previous_entries)
+            save_raw_response(raw_response)
+            save_state(today, "generated")
+        except Exception as e:
+            notify_failure(f"Claude API call failed: {e}")
+            return
+    else:
+        logger.info("Step 2-3: Generate — already done, skipping.")
+        raw_response = None
 
-    # Step 4: Parse and save
-    logger.info("Step 4: Parsing and saving entry...")
-    try:
-        frontmatter, body = parse_reflection(raw_response)
-        sources_md = format_sources(news)
-        filepath = save_entry(frontmatter, body, sources_md)
-    except Exception as e:
-        notify_failure(f"Failed to save entry: {e}")
-        return
+    # Stage 3: Parse and save entry
+    if completed_idx < 2:
+        logger.info("Step 4: Parsing and saving entry...")
 
-    # Step 5: Build site
-    logger.info("Step 5: Building site...")
-    if not build_site():
-        notify_failure("Hugo build failed")
-        return
+        # If resuming after generation, load raw response from disk
+        if raw_response is None:
+            raw_path = DATA_DIR / f"{today}-raw.md"
+            if not raw_path.exists():
+                notify_failure("Cannot resume: raw response file missing")
+                return
+            raw_response = raw_path.read_text()
 
-    # Step 6: Commit and push
-    logger.info("Step 6: Committing and pushing...")
-    if not git_commit_and_push(filepath):
-        notify_failure("Git push failed")
-        return
+        try:
+            frontmatter, body = parse_reflection(raw_response)
+            sources_md = format_sources(news)
+            filepath = save_entry(frontmatter, body, sources_md)
+            save_state(today, "saved")
+        except Exception as e:
+            notify_failure(f"Failed to save entry: {e}")
+            return
+    else:
+        logger.info("Step 4: Save — already done, skipping.")
+        filepath = CONTENT_DIR / f"{today}.md"
+
+    # Stage 4: Build site
+    if completed_idx < 3:
+        logger.info("Step 5: Building site...")
+        if not build_site():
+            notify_failure("Hugo build failed")
+            return
+        save_state(today, "built")
+    else:
+        logger.info("Step 5: Build — already done, skipping.")
+
+    # Stage 5: Commit and push
+    if completed_idx < 4:
+        logger.info("Step 6: Committing and pushing...")
+        if not git_commit_and_push(filepath):
+            notify_failure("Git push failed")
+            return
+        save_state(today, "pushed")
 
     logger.info("Daily generation complete!")
 
