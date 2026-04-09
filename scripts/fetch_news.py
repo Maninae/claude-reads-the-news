@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -169,12 +170,73 @@ def deduplicate(articles: list[Article]) -> list[Article]:
 # Module-level Anthropic client (lazy — only created when needed)
 _anthropic_client: anthropic.Anthropic | None = None
 
+API_MAX_RETRIES = 3
+API_BASE_BACKOFF = 4  # seconds, for non-429 retries
+
 
 def _get_anthropic_client() -> anthropic.Anthropic:
     global _anthropic_client
     if _anthropic_client is None:
         _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     return _anthropic_client
+
+
+def _get_retry_after(error: anthropic.RateLimitError) -> float:
+    """Extract retry-after duration from a 429 response. Falls back to 60s."""
+    if error.response and error.response.headers:
+        retry_after = error.response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return float(retry_after)
+            except (ValueError, TypeError):
+                pass
+    return 60.0
+
+
+def call_anthropic_with_retry(create_fn, **kwargs) -> anthropic.types.Message:
+    """Call an Anthropic API method with rate-limit-aware retry.
+
+    On 429: waits the retry-after duration from the response header.
+    On 5xx: exponential backoff.
+    On connection errors: exponential backoff.
+    On 4xx (except 429): raises immediately.
+    """
+    last_error = None
+    for attempt in range(1, API_MAX_RETRIES + 1):
+        try:
+            return create_fn(**kwargs)
+        except anthropic.RateLimitError as e:
+            wait_time = _get_retry_after(e)
+            logger.warning(
+                f"Rate limited (429), waiting {wait_time:.0f}s "
+                f"(attempt {attempt}/{API_MAX_RETRIES})"
+            )
+            last_error = e
+            if attempt < API_MAX_RETRIES:
+                time.sleep(wait_time)
+        except anthropic.APIStatusError as e:
+            if e.status_code >= 500:
+                wait_time = API_BASE_BACKOFF * (2 ** (attempt - 1))
+                logger.warning(
+                    f"API server error ({e.status_code}), retrying in {wait_time}s "
+                    f"(attempt {attempt}/{API_MAX_RETRIES})"
+                )
+                last_error = e
+                if attempt < API_MAX_RETRIES:
+                    time.sleep(wait_time)
+            else:
+                raise  # 4xx (except 429) — don't retry
+        except anthropic.APIConnectionError as e:
+            wait_time = API_BASE_BACKOFF * (2 ** (attempt - 1))
+            logger.warning(
+                f"API connection error, retrying in {wait_time}s "
+                f"(attempt {attempt}/{API_MAX_RETRIES})"
+            )
+            last_error = e
+            if attempt < API_MAX_RETRIES:
+                time.sleep(wait_time)
+
+    raise last_error
 
 
 SCREENING_SYSTEM_PROMPT = (
@@ -225,7 +287,8 @@ def screen_for_prompt_injection(
 
     try:
         client = _get_anthropic_client()
-        message = client.messages.create(
+        message = call_anthropic_with_retry(
+            client.messages.create,
             model=SCREENING_MODEL,
             max_tokens=256,
             temperature=0.0,
@@ -234,8 +297,12 @@ def screen_for_prompt_injection(
         )
         response_text = message.content[0].text.strip()
     except (anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
-        # Network/infrastructure error — fail open
-        logger.error(f"Screening API unreachable, passing articles through: {e}")
+        # Network/infrastructure error — fail open (after retries exhausted)
+        logger.error(f"Screening API unreachable after retries, passing articles through: {e}")
+        return articles
+    except anthropic.RateLimitError as e:
+        # Rate limited even after retries — fail open
+        logger.error(f"Screening rate limited after retries, passing articles through: {e}")
         return articles
     except Exception as e:
         # Unexpected API error — fail closed

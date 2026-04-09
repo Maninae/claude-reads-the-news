@@ -16,7 +16,6 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 import frontmatter as fm_parser
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Add scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -34,7 +33,7 @@ from config import (
     TEMPERATURE,
     TIMEZONE,
 )
-from fetch_news import Article
+from fetch_news import Article, call_anthropic_with_retry
 from fetch_news import fetch_all_news, format_news_for_prompt
 from persona import SYSTEM_PROMPT, build_prompt
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,7 +200,6 @@ def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
     return "\n".join(entries) if entries else ""
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=60))
 def generate_reflection(news_content: str, previous_entries: str) -> str:
     """Call Claude Opus 4.6 to generate today's reflection."""
     if not ANTHROPIC_API_KEY:
@@ -210,12 +208,13 @@ def generate_reflection(news_content: str, previous_entries: str) -> str:
         )
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    today = datetime.now().strftime("%A, %B %-d, %Y")
-    user_prompt = build_prompt(today, news_content, previous_entries)
+    today_str = datetime.now().strftime("%A, %B %-d, %Y")
+    user_prompt = build_prompt(today_str, news_content, previous_entries)
 
     logger.info(f"Calling {MODEL} with {len(user_prompt)} chars of context...")
 
-    message = client.messages.create(
+    message = call_anthropic_with_retry(
+        client.messages.create,
         model=MODEL,
         max_tokens=MAX_TOKENS,
         temperature=TEMPERATURE,
