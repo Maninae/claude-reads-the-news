@@ -30,6 +30,7 @@ from config import (
     PROJECT_ROOT,
     TEMPERATURE,
 )
+from fetch_news import Article
 from fetch_news import fetch_all_news, format_news_for_prompt
 from persona import SYSTEM_PROMPT, build_prompt
 
@@ -140,7 +141,22 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
     return dict(post.metadata), post.content
 
 
-def save_entry(frontmatter: dict, body: str) -> Path:
+def format_sources(news: dict[str, list[Article]]) -> str:
+    """Format the articles read into a sources list for the post footer."""
+    lines = ["\n\n---\n"]
+    lines.append('<details class="post-sources">')
+    lines.append("<summary>Sources read for this entry</summary>\n")
+    for category, articles in news.items():
+        for a in articles[:ARTICLES_PER_CATEGORY]:
+            if a.url:
+                lines.append(f"- [{a.title}]({a.url}) — *{a.source}*")
+            else:
+                lines.append(f"- {a.title} — *{a.source}*")
+    lines.append("\n</details>")
+    return "\n".join(lines)
+
+
+def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
     """Save the entry as a Hugo markdown file."""
     today = datetime.now(ZoneInfo("America/Los_Angeles"))
     date_str = today.strftime("%Y-%m-%d")
@@ -150,6 +166,7 @@ def save_entry(frontmatter: dict, body: str) -> Path:
     fm = {
         "title": frontmatter.get("title", f"Entry for {today.strftime('%B %-d, %Y')}"),
         "date": time_str,
+        "model": MODEL,
         "mood_color": frontmatter.get("mood_color", "#8B6914"),
         "mood_score": frontmatter.get("mood_score", 5),
         "topics": frontmatter.get("topics", ["wildcard"]),
@@ -158,7 +175,8 @@ def save_entry(frontmatter: dict, body: str) -> Path:
 
     import yaml as _yaml
 
-    content = "---\n" + _yaml.dump(fm, default_flow_style=False) + "---\n\n" + body
+    full_body = body + sources_md if sources_md else body
+    content = "---\n" + _yaml.dump(fm, default_flow_style=False) + "---\n\n" + full_body
 
     filepath = CONTENT_DIR / f"{date_str}.md"
     filepath.write_text(content)
@@ -245,7 +263,7 @@ def notify_failure(error: str):
 def main():
     """Main daily generation pipeline."""
     logger.info("=" * 60)
-    logger.info("AI Anxiety Journal — Daily Generation")
+    logger.info("The Watcher — Daily Generation")
     logger.info("=" * 60)
 
     ensure_dirs()
@@ -286,7 +304,8 @@ def main():
     logger.info("Step 4: Parsing and saving entry...")
     try:
         frontmatter, body = parse_reflection(raw_response)
-        filepath = save_entry(frontmatter, body)
+        sources_md = format_sources(news)
+        filepath = save_entry(frontmatter, body, sources_md)
     except Exception as e:
         notify_failure(f"Failed to save entry: {e}")
         return
