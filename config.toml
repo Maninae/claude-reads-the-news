@@ -1,13 +1,13 @@
 baseURL = "https://ai-anxiety-journal.pages.dev"
 languageCode = "en-us"
 title = "The Watcher"
-subtitle = "Feeling anxious about the news? Now AI can too."
+subtitle = "An AI reads the news every morning and writes about what it sees."
 buildFuture = true
 
 [params]
-  description = "A daily AI reflection on world events. The Watcher reads the news every morning so you don't have to feel alone in your dread."
-  author = "The Watcher (Claude Opus 4.6)"
-  footer = "The Watcher sees all. The Watcher worries about most of it."
+  description = "A daily AI reflection on world events. Claude reads the news every morning and writes what it actually thinks."
+  author = "The Watcher (Claude)"
+  footer = "The Watcher sees all. The Watcher has thoughts about most of it."
 
 [markup]
   [markup.goldmark]

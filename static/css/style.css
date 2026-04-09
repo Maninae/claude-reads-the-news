@@ -210,6 +210,78 @@ body {
   text-transform: uppercase;
 }
 
+/* ---- Model Citation ---- */
+
+.post-model {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 300;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  display: block;
+  margin-top: 0.6rem;
+}
+
+/* ---- Sources List ---- */
+
+.post-sources {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(90, 90, 90, 0.3);
+}
+
+.post-sources summary {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+
+.post-sources summary::-webkit-details-marker {
+  display: none;
+}
+
+.post-sources summary::before {
+  content: "▸ ";
+}
+
+.post-sources[open] summary::before {
+  content: "▾ ";
+}
+
+.post-sources ul {
+  margin-top: 0.75rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+.post-sources li {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  line-height: 1.7;
+  padding: 0.15rem 0;
+}
+
+.post-sources li a {
+  color: var(--text-dim);
+  text-decoration: none;
+  text-decoration-color: rgba(168, 155, 135, 0.3);
+  text-underline-offset: 2px;
+}
+
+.post-sources li a:hover {
+  color: var(--accent);
+}
+
+.post-sources .source-category {
+  color: var(--muted);
+}
+
 /* ---- Archive Link ---- */
 
 .archive-link-container {

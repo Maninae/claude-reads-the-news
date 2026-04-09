@@ -14,6 +14,9 @@
       {{ end }}
     </div>
     {{ end }}
+    {{ with .Params.model }}
+    <span class="post-model">Written by {{ . }}</span>
+    {{ end }}
   </header>
 
   <div class="post-content">
