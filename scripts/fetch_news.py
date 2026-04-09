@@ -6,17 +6,22 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import anthropic
 import feedparser
+import requests
 import trafilatura
 
-from config import ANTHROPIC_API_KEY, ARTICLES_PER_CATEGORY, RSS_FEEDS
+from config import ANTHROPIC_API_KEY, ARTICLES_PER_CATEGORY, DATA_DIR, RSS_FEEDS
 
 logger = logging.getLogger(__name__)
 
 MAX_CONTENT_CHARS = 1000
 SCREENING_MODEL = "claude-sonnet-4-6-20250514"
+RSS_FETCH_TIMEOUT = 15  # seconds per feed
+RSS_MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5MB cap per feed
+RSS_HEADERS = {"User-Agent": "AIAnxietyJournal/1.0 (RSS reader)"}
 
 
 @dataclass
@@ -54,10 +59,42 @@ def strip_html(text: str) -> str:
     return text.strip()
 
 
-def fetch_rss_feed(url: str, category: str) -> list[Article]:
-    """Fetch articles from a single RSS feed."""
+def _fetch_feed_content(url: str) -> bytes:
+    """Download feed content with timeout and size cap.
+
+    Streams the response and aborts if it exceeds RSS_MAX_RESPONSE_BYTES.
+    """
+    response = requests.get(
+        url, timeout=RSS_FETCH_TIMEOUT, headers=RSS_HEADERS, stream=True,
+    )
+    response.raise_for_status()
+    chunks = []
+    size = 0
+    for chunk in response.iter_content(8192):
+        size += len(chunk)
+        if size > RSS_MAX_RESPONSE_BYTES:
+            response.close()
+            raise ValueError(
+                f"Feed exceeds {RSS_MAX_RESPONSE_BYTES} bytes, skipping"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def fetch_rss_feed(url: str, category: str) -> tuple[list[Article], str | None]:
+    """Fetch articles from a single RSS feed with timeout.
+
+    Returns (articles, error_string). error_string is None on success.
+    """
     try:
-        feed = feedparser.parse(url)
+        content = _fetch_feed_content(url)
+        feed = feedparser.parse(content)
+
+        if feed.bozo and not feed.entries:
+            msg = f"malformed feed: {feed.bozo_exception}"
+            logger.warning(f"Malformed feed with no entries: {url} — {feed.bozo_exception}")
+            return [], msg
+
         articles = []
         for entry in feed.entries[:ARTICLES_PER_CATEGORY]:
             summary = ""
@@ -72,10 +109,21 @@ def fetch_rss_feed(url: str, category: str) -> list[Article]:
                     category=category,
                 )
             )
-        return articles
+        return articles, None
+    except requests.Timeout:
+        msg = f"timeout after {RSS_FETCH_TIMEOUT}s"
+        logger.warning(f"Feed timed out after {RSS_FETCH_TIMEOUT}s: {url}")
+        return [], msg
+    except requests.HTTPError as e:
+        msg = f"HTTP {e.response.status_code}"
+        logger.warning(f"Feed returned HTTP {e.response.status_code}: {url}")
+        return [], msg
+    except requests.ConnectionError:
+        logger.warning(f"Feed unreachable: {url}")
+        return [], "connection error"
     except Exception as e:
         logger.warning(f"Failed to fetch {url}: {e}")
-        return []
+        return [], str(e)
 
 
 def extract_full_text(article: Article) -> Article:
@@ -222,15 +270,128 @@ def screen_for_prompt_injection(
     return articles
 
 
+FEED_HEALTH_PATH = DATA_DIR / "feed-health.json"
+FEED_FAILURE_THRESHOLD = 0.8  # log error if >80% of feeds fail
+
+
+class AllFeedsFailedError(Exception):
+    """Raised when every configured RSS feed fails to return articles."""
+
+
+def _save_feed_health(feed_stats: dict[str, dict]) -> None:
+    """Persist per-feed health to data/feed-health.json."""
+    timestamp = datetime.now().isoformat()
+
+    # Load existing history
+    history: dict = {}
+    if FEED_HEALTH_PATH.exists():
+        try:
+            history = json.loads(FEED_HEALTH_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            history = {}
+
+    # Update each feed's record
+    for url, stats in feed_stats.items():
+        record = history.get(url, {"successes": 0, "failures": 0})
+        if stats["ok"]:
+            record["successes"] = record.get("successes", 0) + 1
+            record["last_success"] = timestamp
+        else:
+            record["failures"] = record.get("failures", 0) + 1
+            record["last_failure"] = timestamp
+            record["last_error"] = stats.get("error", "unknown")
+        record["last_checked"] = timestamp
+        history[url] = record
+
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        FEED_HEALTH_PATH.write_text(json.dumps(history, indent=2) + "\n")
+    except OSError as e:
+        logger.warning(f"Could not write feed health log: {e}")
+
+
+def check_feed_health() -> dict[str, list[dict]]:
+    """Check connectivity and parse status of all configured feeds.
+
+    Returns a dict of category → list of {url, ok, entries, error} results.
+    Useful for monitoring which feeds are healthy.
+    """
+    results: dict[str, list[dict]] = {}
+    for category, urls in RSS_FEEDS.items():
+        results[category] = []
+        for url in urls:
+            try:
+                content = _fetch_feed_content(url)
+                feed = feedparser.parse(content)
+                n_entries = len(feed.entries)
+                results[category].append({
+                    "url": url,
+                    "ok": n_entries > 0,
+                    "entries": n_entries,
+                    "error": None if n_entries > 0 else "no entries",
+                })
+            except Exception as e:
+                results[category].append({
+                    "url": url, "ok": False, "entries": 0, "error": str(e),
+                })
+    return results
+
+
 def fetch_all_news() -> dict[str, list[Article]]:
-    """Fetch news from all configured RSS feeds, deduplicated."""
+    """Fetch news from all configured RSS feeds, deduplicated.
+
+    Raises AllFeedsFailedError if every feed fails.
+    """
     all_articles = []
+    feed_stats: dict[str, dict] = {}  # url → {ok, count, error}
 
     for category, urls in RSS_FEEDS.items():
+        category_count = 0
         for url in urls:
-            articles = fetch_rss_feed(url, category)
+            articles, error = fetch_rss_feed(url, category)
             all_articles.extend(articles)
-            logger.info(f"Fetched {len(articles)} articles from {url}")
+            feed_stats[url] = {
+                "ok": len(articles) > 0,
+                "count": len(articles),
+                "error": error,
+            }
+            if articles:
+                logger.info(f"Fetched {len(articles)} articles from {url}")
+                category_count += len(articles)
+
+        if category_count == 0:
+            logger.warning(
+                f"No articles fetched for category '{category}' — "
+                f"all {len(urls)} feeds failed or returned empty"
+            )
+
+    # Persist feed health to disk
+    _save_feed_health(feed_stats)
+
+    # Evaluate overall health
+    ok_count = sum(1 for s in feed_stats.values() if s["ok"])
+    total_count = len(feed_stats)
+    failed_urls = [url for url, s in feed_stats.items() if not s["ok"]]
+
+    if ok_count == 0:
+        logger.error(
+            f"ALL {total_count} feeds failed — aborting. "
+            f"Check network connectivity and feed URLs."
+        )
+        raise AllFeedsFailedError(
+            f"All {total_count} configured feeds failed to return articles"
+        )
+
+    if total_count > 0 and (total_count - ok_count) / total_count > FEED_FAILURE_THRESHOLD:
+        logger.error(
+            f"Feed health CRITICAL: only {ok_count}/{total_count} feeds returned articles. "
+            f"Failed: {failed_urls}"
+        )
+    elif ok_count < total_count:
+        logger.warning(
+            f"Feed health: {ok_count}/{total_count} feeds returned articles. "
+            f"Failed: {failed_urls}"
+        )
 
     # Deduplicate across all sources
     unique = deduplicate(all_articles)
