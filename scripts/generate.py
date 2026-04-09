@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     ANTHROPIC_API_KEY,
+    ARTICLES_PER_CATEGORY,
     CONTENT_DIR,
     DATA_DIR,
     MAX_TOKENS,
@@ -29,6 +30,7 @@ from config import (
     MODEL,
     PROJECT_ROOT,
     TEMPERATURE,
+    TIMEZONE,
 )
 from fetch_news import Article
 from fetch_news import fetch_all_news, format_news_for_prompt
@@ -128,7 +130,7 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
         text = text.strip()
 
     if not text.startswith("---"):
-        today = datetime.now(ZoneInfo("America/Los_Angeles"))
+        today = datetime.now(ZoneInfo(TIMEZONE))
         return {
             "title": f"Entry for {today.strftime('%B %-d, %Y')}",
             "mood_score": 5,
@@ -158,7 +160,7 @@ def format_sources(news: dict[str, list[Article]]) -> str:
 
 def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
     """Save the entry as a Hugo markdown file."""
-    today = datetime.now(ZoneInfo("America/Los_Angeles"))
+    today = datetime.now(ZoneInfo(TIMEZONE))
     date_str = today.strftime("%Y-%m-%d")
     time_str = today.isoformat()
 

@@ -1,5 +1,6 @@
-"""Configuration for the AI Anxiety Journal daily generation."""
+"""Configuration for The Watcher daily generation."""
 
+import json
 import os
 from pathlib import Path
 
@@ -7,6 +8,15 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 CONTENT_DIR = PROJECT_ROOT / "content" / "posts"
 DATA_DIR = PROJECT_ROOT / "data"
+
+# Load local config (user-specific paths, gitignored)
+_local_config_path = PROJECT_ROOT / "local.json"
+LOCAL_CONFIG = {}
+if _local_config_path.exists():
+    with open(_local_config_path) as _f:
+        LOCAL_CONFIG = json.load(_f)
+
+TIMEZONE = LOCAL_CONFIG.get("timezone", "America/Los_Angeles")
 
 # Anthropic API
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

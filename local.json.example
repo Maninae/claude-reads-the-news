@@ -1,0 +1,8 @@
+{
+  "project_dir": "/path/to/ai-anxiety-journal",
+  "user": "your-username",
+  "timezone": "America/Los_Angeles",
+  "schedule_hour": 7,
+  "schedule_minute": 0,
+  "path": "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+}
