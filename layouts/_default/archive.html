@@ -1,0 +1,133 @@
+{{ define "main" }}
+<div class="archive-page">
+  <h1 class="archive-title">Archive</h1>
+
+  {{ $posts := where .Site.RegularPages "Section" "posts" }}
+  {{ $hasMoodData := false }}
+  {{ range $posts }}
+    {{ if .Params.mood_score }}{{ $hasMoodData = true }}{{ end }}
+  {{ end }}
+
+  {{ if $hasMoodData }}
+  <div class="mood-chart-container">
+    <h2 class="mood-chart-title">The Watcher's Mood Over Time</h2>
+    <canvas id="moodChart"></canvas>
+  </div>
+  {{ end }}
+
+  <div class="archive-entries">
+    {{ range ($posts.ByDate.Reverse) }}
+    <article class="archive-entry">
+      <div class="entry-mood-strip" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
+      <a href="{{ .Permalink }}" class="archive-entry-link">
+        <time class="entry-date" datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
+          {{ .Date.Format "Monday, January 2, 2006" | upper }}
+        </time>
+        <h2 class="entry-title">{{ .Title }}</h2>
+        {{ with .Params.topics }}
+        <div class="entry-topics">
+          {{ range . }}
+          <span class="topic-badge">{{ . }}</span>
+          {{ end }}
+        </div>
+        {{ end }}
+      </a>
+    </article>
+    {{ end }}
+  </div>
+</div>
+
+{{ if $hasMoodData }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const ctx = document.getElementById('moodChart').getContext('2d');
+
+  const data = [
+    {{ range ($posts.ByDate) }}
+    {{ if .Params.mood_score }}
+    {
+      date: '{{ .Date.Format "Jan 2" }}',
+      score: {{ .Params.mood_score }},
+      color: '{{ with .Params.mood_color }}{{ . }}{{ else }}#c45d3e{{ end }}',
+      title: {{ .Title | jsonify }}
+    },
+    {{ end }}
+    {{ end }}
+  ];
+
+  const labels = data.map(d => d.date);
+  const scores = data.map(d => d.score);
+  const colors = data.map(d => d.color);
+
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Mood Score',
+        data: scores,
+        borderColor: '#c45d3e',
+        backgroundColor: 'rgba(196, 93, 62, 0.1)',
+        borderWidth: 2,
+        pointBackgroundColor: colors,
+        pointBorderColor: colors,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+        tension: 0.3,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 2.5,
+      scales: {
+        y: {
+          min: 0,
+          max: 10,
+          ticks: {
+            color: '#4a4a4a',
+            font: { family: 'JetBrains Mono', size: 11 },
+            stepSize: 2,
+            callback: function(value) {
+              const labels = {0: 'Despair', 2: 'Dread', 4: 'Uneasy', 6: 'Watchful', 8: 'Hopeful', 10: 'Serene'};
+              return labels[value] || '';
+            }
+          },
+          grid: { color: 'rgba(74, 74, 74, 0.3)' }
+        },
+        x: {
+          ticks: {
+            color: '#4a4a4a',
+            font: { family: 'JetBrains Mono', size: 11 }
+          },
+          grid: { color: 'rgba(74, 74, 74, 0.15)' }
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1a1a',
+          titleColor: '#e0d5c1',
+          bodyColor: '#e0d5c1',
+          borderColor: '#4a4a4a',
+          borderWidth: 1,
+          titleFont: { family: 'Source Serif 4' },
+          bodyFont: { family: 'JetBrains Mono', size: 12 },
+          callbacks: {
+            title: function(items) {
+              return data[items[0].dataIndex].title;
+            },
+            label: function(item) {
+              return 'Mood: ' + item.raw + '/10';
+            }
+          }
+        }
+      }
+    }
+  });
+});
+</script>
+{{ end }}
+{{ end }}

@@ -1,0 +1,38 @@
+{{ define "main" }}
+<article class="post">
+  <div class="post-mood-strip" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
+
+  <header class="post-header">
+    <time class="post-date" datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
+      {{ .Date.Format "Monday, January 2, 2006" | upper }} — {{ .Date.Format "3:04 PM" }}
+    </time>
+    <h1 class="post-title">{{ .Title }}</h1>
+    {{ with .Params.topics }}
+    <div class="post-topics">
+      {{ range . }}
+      <span class="topic-badge">{{ . }}</span>
+      {{ end }}
+    </div>
+    {{ end }}
+  </header>
+
+  <div class="post-content">
+    {{ .Content }}
+  </div>
+
+  <nav class="post-nav">
+    {{ with .PrevInSection }}
+    <a href="{{ .Permalink }}" class="post-nav-link post-nav-prev">
+      <span class="post-nav-label">← Previous</span>
+      <span class="post-nav-title">{{ .Title }}</span>
+    </a>
+    {{ end }}
+    {{ with .NextInSection }}
+    <a href="{{ .Permalink }}" class="post-nav-link post-nav-next">
+      <span class="post-nav-label">Next →</span>
+      <span class="post-nav-title">{{ .Title }}</span>
+    </a>
+    {{ end }}
+  </nav>
+</article>
+{{ end }}

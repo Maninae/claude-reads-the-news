@@ -1,0 +1,21 @@
+# Environment
+.env
+venv/
+__pycache__/
+
+# Hugo build output
+public/
+resources/_gen/
+
+# Logs
+logs/
+
+# Raw API responses (may contain full news text)
+data/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
