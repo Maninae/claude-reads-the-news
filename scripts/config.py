@@ -8,6 +8,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 CONTENT_DIR = PROJECT_ROOT / "content" / "posts"
 DATA_DIR = PROJECT_ROOT / "data"
+LOG_DIR = PROJECT_ROOT / "logs"
+FEED_HEALTH_PATH = DATA_DIR / "feed-health.json"
 
 # Load local config (user-specific paths, gitignored)
 _local_config_path = PROJECT_ROOT / "local.json"

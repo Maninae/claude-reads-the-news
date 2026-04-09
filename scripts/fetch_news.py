@@ -13,7 +13,13 @@ import feedparser
 import requests
 import trafilatura
 
-from config import ANTHROPIC_API_KEY, ARTICLES_PER_CATEGORY, DATA_DIR, RSS_FEEDS
+from config import (
+    ANTHROPIC_API_KEY,
+    ARTICLES_PER_CATEGORY,
+    DATA_DIR,
+    FEED_HEALTH_PATH,
+    RSS_FEEDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +276,6 @@ def screen_for_prompt_injection(
     return articles
 
 
-FEED_HEALTH_PATH = DATA_DIR / "feed-health.json"
 FEED_FAILURE_THRESHOLD = 0.8  # log error if >80% of feeds fail
 
 

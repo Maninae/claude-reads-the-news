@@ -6,6 +6,7 @@ Fetches news, generates a reflection via Claude Opus 4.6, publishes to the site.
 
 import json
 import logging
+import logging.handlers
 import os
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from config import (
     ARTICLES_PER_CATEGORY,
     CONTENT_DIR,
     DATA_DIR,
+    LOG_DIR,
     MAX_TOKENS,
     MEMORY_ENTRIES,
     MODEL,
@@ -35,13 +37,19 @@ from config import (
 from fetch_news import Article
 from fetch_news import fetch_all_news, format_news_for_prompt
 from persona import SYSTEM_PROMPT, build_prompt
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_RETENTION_DAYS = 30
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(PROJECT_ROOT / "logs" / "generate.log"),
+        logging.handlers.TimedRotatingFileHandler(
+            LOG_DIR / "generate.log",
+            when="midnight",
+            backupCount=LOG_RETENTION_DAYS,
+        ),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -51,7 +59,7 @@ def ensure_dirs():
     """Create necessary directories."""
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    (PROJECT_ROOT / "logs").mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
@@ -255,7 +263,7 @@ def git_commit_and_push(filepath: Path) -> bool:
 
 def notify_failure(error: str):
     """Send a notification on failure. Writes to a failure log for now."""
-    failure_path = PROJECT_ROOT / "logs" / "failures.log"
+    failure_path = LOG_DIR / "failures.log"
     timestamp = datetime.now().isoformat()
     with open(failure_path, "a") as f:
         f.write(f"{timestamp}: {error}\n")
