@@ -2,12 +2,15 @@
 
 import hashlib
 import html
+import ipaddress
 import json
 import logging
 import re
+import socket
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from urllib.parse import urlparse
 
 import anthropic
 import feedparser
@@ -133,9 +136,137 @@ def fetch_rss_feed(url: str, category: str) -> tuple[list[Article], str | None]:
         return [], str(e)
 
 
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if the address is in a range we never want to fetch from.
+
+    The explicit is_* flags document intent. `not ip.is_global` is a
+    belt-and-suspenders catch-all that covers CGNAT (100.64/10), IETF
+    protocol assignments, documentation ranges (198.51.100/24, 2001:db8::/32),
+    and anything the stdlib starts classifying as non-routable in the future
+    — none of which are caught by is_private on current Python. We also keep
+    is_multicast explicitly because multicast is is_global=True.
+
+    Before flag-checking, we unwrap IPv6 tunneling / mapping formats that
+    embed an inner IPv4 address (6to4 2002::/16, Teredo 2001::/32, and
+    v4-mapped ::ffff:x.x.x.x). Python's `is_global` reports True for 6to4
+    addresses even when the embedded IPv4 points at 127.0.0.1 or
+    169.254.169.254 — so without unwrapping, `2002:a9fe:a9fe::` would pass
+    the guard despite literally embedding the AWS metadata endpoint. We
+    recurse on the inner address for all three wrapper formats.
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        # 6to4: 2002:aabb:ccdd:: → aa.bb.cc.dd
+        sixtofour = ip.sixtofour
+        if sixtofour is not None and _is_blocked_ip(sixtofour):
+            return True
+        # IPv4-mapped: ::ffff:aa.bb.cc.dd (redundant with is_private
+        # for private inner addresses but keeps the logic uniform and
+        # future-proof if stdlib classification changes)
+        mapped = ip.ipv4_mapped
+        if mapped is not None and _is_blocked_ip(mapped):
+            return True
+        # Teredo: 2001::/32, tuple of (server, client) IPv4 addresses.
+        # Block if either side is in a blocked range.
+        teredo = ip.teredo
+        if teredo is not None:
+            server, client = teredo
+            if _is_blocked_ip(server) or _is_blocked_ip(client):
+                return True
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+# Characters that can appear in an IP literal (decimal, hex, or IPv6).
+# A hostname containing ONLY these characters is assumed to be an
+# IP-literal attempt; if strict parsing fails, we reject it rather than
+# pass it to getaddrinfo, whose behavior on ambiguous forms varies by
+# platform (glibc treats "0177.0.0.1" as octal → 127.0.0.1; macOS strips
+# the leading zero → 177.0.0.1; libcurl differs from both). Legitimate
+# DNS hostnames contain letters outside the hex range (g-z).
+_IP_LITERAL_CHARS = frozenset("0123456789abcdefABCDEFxX.:")
+
+
+def _is_safe_url(url: str) -> bool:
+    """Validate a URL for SSRF safety before fetching.
+
+    Rejects URLs that:
+    - Use a scheme other than http/https (blocks file:, gopher:, ftp:, data:, etc.)
+    - Have no parseable hostname
+    - Point at an IP literal in a private/loopback/link-local/reserved/
+      multicast/unspecified range (strict parse via ipaddress.ip_address)
+    - Use an IP-LIKE literal that strict parsing rejects (leading zeros,
+      single-integer decimal, hex, etc.) — these are ambiguous across
+      resolvers and we refuse rather than guess
+    - Resolve (via getaddrinfo, all A/AAAA records for a real hostname)
+      to any IP in the blocked ranges. Covers RFC1918 (10/8, 172.16/12,
+      192.168/16), loopback (127/8, ::1), link-local (169.254/16 — notably
+      the AWS/GCP metadata endpoint 169.254.169.254 — and fe80::/10),
+      IPv6 ULA (fc00::/7), reserved, and 0.0.0.0 / ::.
+
+    Fails closed: any parse/resolve exception returns False.
+
+    Known gaps (not fixable in this check, documented for reviewer):
+    - Redirects: trafilatura follows HTTP redirects; only the initial URL
+      is validated. A public URL can 3xx into 127.0.0.1 or a metadata
+      endpoint. Mitigation would require a custom fetcher that disables
+      redirects or re-validates each hop — out of scope for this task.
+    - DNS rebinding TOCTOU: we resolve here, trafilatura resolves again a
+      moment later. An attacker controlling a DNS server can return a
+      public IP on the first lookup and a private IP on the second. Not
+      worth fixing for a daily batch job with no secrets on loopback.
+    - DNS hang: socket.getaddrinfo has no per-call timeout; we rely on the
+      system resolver's default timeout.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Step 1: if the hostname is a strict IP literal, check it directly
+        # (bypasses any DNS lookup — and any resolver quirks).
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+            return not _is_blocked_ip(literal_ip)
+        except ValueError:
+            pass
+
+        # Step 2: if the hostname LOOKS numeric but failed strict parsing,
+        # refuse. Catches 0177.0.0.1, 2130706433, 0x7f000001, and similar
+        # ambiguous forms before they can hit an inconsistent resolver.
+        if all(c in _IP_LITERAL_CHARS for c in hostname):
+            return False
+
+        # Step 3: real hostname — resolve and check every returned address.
+        infos = socket.getaddrinfo(hostname, None)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if _is_blocked_ip(ip):
+                return False
+        return True
+    except Exception:
+        # Fail closed on any unexpected error (gaierror, UnicodeError on
+        # bad IDN, ValueError from ipaddress, etc.)
+        return False
+
+
 def extract_full_text(article: Article) -> Article:
     """Extract full article text using trafilatura, with fallback HTML stripping."""
     if not article.url:
+        return article
+    if not _is_safe_url(article.url):
+        logger.warning(
+            f"SSRF guard: refusing to fetch unsafe URL: {article.url}"
+        )
         return article
     try:
         downloaded = trafilatura.fetch_url(article.url)
