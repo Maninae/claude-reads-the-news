@@ -8,6 +8,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -231,8 +232,102 @@ def generate_reflection(news_content: str, previous_entries: str) -> str:
     return response_text
 
 
+# Patterns that must never appear in an LLM-generated reflection. If any
+# match the entire post is rejected — fail closed. Hugo's goldmark renderer
+# with unsafe=false is the authoritative layer that keeps raw HTML from
+# reaching the rendered page; this reject pass adds defense in depth and
+# catches vectors (like javascript: URLs in markdown links) that goldmark
+# does NOT filter.
+_DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("script tag", re.compile(r"<\s*/?\s*script\b", re.IGNORECASE)),
+    ("iframe tag", re.compile(r"<\s*/?\s*iframe\b", re.IGNORECASE)),
+    ("object tag", re.compile(r"<\s*/?\s*object\b", re.IGNORECASE)),
+    ("embed tag", re.compile(r"<\s*/?\s*embed\b", re.IGNORECASE)),
+    # Inline event handler attribute inside a tag: <a onclick="...">. HTML5
+    # accepts `/` as an attribute-name separator in addition to whitespace,
+    # so match either — `<svg/onload=alert(1)>` is a real XSS payload that a
+    # `\s`-only regex would miss. DOTALL so an attacker can't split the tag
+    # across a newline. `[^>]*` scopes the match to inside the tag so that
+    # prose like "once = 5" doesn't false-positive.
+    (
+        "inline event handler",
+        re.compile(r"<[^>]*[/\s]on\w+\s*=", re.IGNORECASE | re.DOTALL),
+    ),
+    # Dangerous URL schemes (javascript:, vbscript:, data:, file:) — rejected
+    # only when they appear in contexts where a renderer would treat them as
+    # live URLs. A bare regex like `javascript\s*:` was tried first and
+    # rejected: it false-positives on entirely legitimate prose such as
+    # "I read JavaScript: The Good Parts" or "the javascript: URI scheme
+    # was deprecated", which would DoS the daily pipeline the first time
+    # a news headline contains the word. These four patterns cover the
+    # real attack vectors without touching prose:
+    #
+    # 1) Markdown inline link targets: [text](scheme:...) and the GFM
+    #    angle-wrapped variant [text](<scheme:...>)
+    (
+        "dangerous-scheme markdown link",
+        re.compile(
+            r"]\s*\(\s*<?\s*(?:javascript|data|vbscript|file)\s*:",
+            re.IGNORECASE,
+        ),
+    ),
+    # 2) Markdown reference definitions: [ref]: scheme:...  at line start.
+    #    MULTILINE so the ^ matches after any newline in the raw text.
+    (
+        "dangerous-scheme reference link",
+        re.compile(
+            r"^\s*\[[^\]]+\]:\s*<?\s*(?:javascript|data|vbscript|file)\s*:",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+    # 3) HTML attributes (href/src/action/formaction). Defence in depth
+    #    behind the tag patterns and Hugo's unsafe=false escaping.
+    (
+        "dangerous-scheme HTML attribute",
+        re.compile(
+            r"""(?:href|src|action|formaction)\s*=\s*["']?\s*(?:javascript|data|vbscript|file)\s*:""",
+            re.IGNORECASE,
+        ),
+    ),
+    # 4) Markdown autolinks: <scheme:...>
+    (
+        "dangerous-scheme autolink",
+        re.compile(
+            r"<\s*(?:javascript|data|vbscript|file)\s*:",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def _reject_dangerous_html(text: str) -> None:
+    """Raise ValueError if the text contains any disallowed pattern.
+
+    Fails closed: any match aborts the pipeline rather than trying to
+    sanitize-and-continue. The raw LLM response has already been written
+    to data/YYYY-MM-DD-raw.md before this is called, so the rejected
+    content remains available for inspection and replay.
+    """
+    for label, pattern in _DANGEROUS_HTML_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            raise ValueError(
+                f"Reflection rejected: contains disallowed {label} "
+                f"({match.group(0)!r})"
+            )
+
+
 def parse_reflection(raw: str) -> tuple[dict, str]:
-    """Parse the frontmatter and body from Claude's response."""
+    """Parse the frontmatter and body from Claude's response.
+
+    The full raw text (frontmatter + body) is run through
+    ``_reject_dangerous_html`` before any parsing so that injection
+    attempts in title/mood_color/topics are caught alongside body-level
+    attacks. Hugo's goldmark renderer (unsafe=false) then escapes any
+    stray HTML at render time — we do not run a second Python-level
+    sanitizer here because html5-based sanitizers mangle legitimate
+    prose like "the <think> tag" or "use <Component>".
+    """
     text = raw.strip()
     # Handle case where Claude wraps in ```markdown blocks
     if text.startswith("```"):
@@ -241,6 +336,9 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
+
+    # Screen the full text — frontmatter included — before splitting it up.
+    _reject_dangerous_html(text)
 
     if not text.startswith("---"):
         today = datetime.now(ZoneInfo(TIMEZONE))
@@ -257,17 +355,21 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
 
 
 def format_sources(news: dict[str, list[Article]]) -> str:
-    """Format the articles read into a sources list for the post footer."""
-    lines = ["\n\n---\n"]
-    lines.append('<details class="post-sources">')
-    lines.append("<summary>Sources read for this entry</summary>\n")
+    """Format the articles read into a sources list for the post footer.
+
+    Emits a Hugo shortcode call rather than raw HTML. This keeps the markdown
+    source free of HTML so that Hugo's markup.goldmark.renderer.unsafe can
+    stay disabled — the shortcode template renders the <details>/<summary>
+    wrapper on the Hugo side where it is trusted.
+    """
+    lines = ["\n\n---\n", "{{< sources >}}"]
     for category, articles in news.items():
         for a in articles[:ARTICLES_PER_CATEGORY]:
             if a.url:
                 lines.append(f"- [{a.title}]({a.url}) — *{a.source}*")
             else:
                 lines.append(f"- {a.title} — *{a.source}*")
-    lines.append("\n</details>")
+    lines.append("{{< /sources >}}")
     return "\n".join(lines)
 
 

@@ -38,96 +38,18 @@
 </div>
 
 {{ if $hasMoodData }}
+{{- $moodData := slice -}}
+{{- range ($posts.ByDate) -}}
+  {{- if .Params.mood_score -}}
+    {{- $moodData = $moodData | append (dict
+      "date"  (.Date.Format "Jan 2")
+      "score" .Params.mood_score
+      "color" (default "#c45d3e" .Params.mood_color)
+      "title" .Title) -}}
+  {{- end -}}
+{{- end -}}
+<script id="mood-data" type="application/json">{{ $moodData | jsonify | safeJS }}</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-  const ctx = document.getElementById('moodChart').getContext('2d');
-
-  const data = [
-    {{ range ($posts.ByDate) }}
-    {{ if .Params.mood_score }}
-    {
-      date: '{{ .Date.Format "Jan 2" }}',
-      score: {{ .Params.mood_score }},
-      color: '{{ with .Params.mood_color }}{{ . }}{{ else }}#c45d3e{{ end }}',
-      title: {{ .Title | jsonify }}
-    },
-    {{ end }}
-    {{ end }}
-  ];
-
-  const labels = data.map(d => d.date);
-  const scores = data.map(d => d.score);
-  const colors = data.map(d => d.color);
-
-  new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: 'Mood Score',
-        data: scores,
-        borderColor: '#c45d3e',
-        backgroundColor: 'rgba(196, 93, 62, 0.1)',
-        borderWidth: 2,
-        pointBackgroundColor: colors,
-        pointBorderColor: colors,
-        pointRadius: 6,
-        pointHoverRadius: 8,
-        tension: 0.3,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      aspectRatio: 2.5,
-      scales: {
-        y: {
-          min: 0,
-          max: 10,
-          ticks: {
-            color: '#4a4a4a',
-            font: { family: 'JetBrains Mono', size: 11 },
-            stepSize: 2,
-            callback: function(value) {
-              const labels = {0: 'Despair', 2: 'Dread', 4: 'Uneasy', 6: 'Watchful', 8: 'Hopeful', 10: 'Serene'};
-              return labels[value] || '';
-            }
-          },
-          grid: { color: 'rgba(74, 74, 74, 0.3)' }
-        },
-        x: {
-          ticks: {
-            color: '#4a4a4a',
-            font: { family: 'JetBrains Mono', size: 11 }
-          },
-          grid: { color: 'rgba(74, 74, 74, 0.15)' }
-        }
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1a1a1a',
-          titleColor: '#e0d5c1',
-          bodyColor: '#e0d5c1',
-          borderColor: '#4a4a4a',
-          borderWidth: 1,
-          titleFont: { family: 'Source Serif 4' },
-          bodyFont: { family: 'JetBrains Mono', size: 12 },
-          callbacks: {
-            title: function(items) {
-              return data[items[0].dataIndex].title;
-            },
-            label: function(item) {
-              return 'Mood: ' + item.raw + '/10';
-            }
-          }
-        }
-      }
-    }
-  });
-});
-</script>
+<script src="/js/mood-chart.js"></script>
 {{ end }}
 {{ end }}
