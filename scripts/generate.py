@@ -13,6 +13,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -354,6 +355,72 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
     return dict(post.metadata), post.content
 
 
+# Characters backslash-escaped in attacker-influenced source titles/names
+# before embedding them in the sources list. This is the subset of
+# CommonMark 6.1 (Backslash escapes) that can affect inline parsing:
+# link/image syntax ([ ] ( ) !), emphasis runs (* _), code spans (`),
+# HTML injection (< >), headings/ordered lists (# + - . at line start),
+# tables (|), raw HTML entities ({ }), and the escape itself (\).
+_SOURCE_MD_META_CHARS = r"\`*_{}[]()#+-.!|<>"
+_SOURCE_MD_ESCAPE_RE = re.compile("([" + re.escape(_SOURCE_MD_META_CHARS) + "])")
+
+# Sanity limit on URL length — any URL longer than this is almost certainly
+# a pathological/adversarial payload, not a legitimate article link.
+_MAX_SOURCE_URL_LEN = 2048
+
+
+def _escape_md_inline(text: str) -> str:
+    """Backslash-escape CommonMark inline metacharacters and collapse whitespace.
+
+    Titles and source names come from attacker-influenced RSS feeds. Without
+    escaping, a hostile title containing `](...)` could reshape the link
+    target, `*` could break italic runs, and `<script>` would reach the
+    renderer as raw HTML. Apostrophes, em-dashes, quotes, and ampersands
+    are NOT in the metacharacter set — they pass through untouched.
+
+    Also collapses any internal whitespace — a newline in a title would
+    break the list-item boundary and leak following content into the body.
+    """
+    if not text:
+        return ""
+    escaped = _SOURCE_MD_ESCAPE_RE.sub(r"\\\1", text)
+    return re.sub(r"\s+", " ", escaped).strip()
+
+
+def _safe_source_url(url: str) -> str | None:
+    """Return the URL if it is safe to embed as a markdown link target.
+
+    Requirements:
+    - Length must be ≤ _MAX_SOURCE_URL_LEN (2048 bytes). Anything longer is
+      almost certainly an adversarial payload.
+    - Scheme must be http or https. Anything else (javascript:, data:,
+      file:, gopher:, mailto:, etc.) is rejected — caller emits the title
+      as plain text with no link.
+    - Must have a hostname.
+    - Must not contain `<`, `>`, or whitespace. We angle-wrap link targets
+      (`[text](<url>)`) so that balanced parens in the URL do not confuse
+      the parser; angle-wrap requires `<`/`>`/whitespace to be absent
+      inside the target.
+
+    Returns None on any rejection. Caller is responsible for logging.
+    """
+    if not url:
+        return None
+    if len(url) > _MAX_SOURCE_URL_LEN:
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if not parsed.hostname:
+        return None
+    if any(c in url for c in "<> \t\r\n"):
+        return None
+    return url
+
+
 def format_sources(news: dict[str, list[Article]]) -> str:
     """Format the articles read into a sources list for the post footer.
 
@@ -361,14 +428,25 @@ def format_sources(news: dict[str, list[Article]]) -> str:
     source free of HTML so that Hugo's markup.goldmark.renderer.unsafe can
     stay disabled — the shortcode template renders the <details>/<summary>
     wrapper on the Hugo side where it is trusted.
+
+    All attacker-controlled text (article titles, source names) is
+    backslash-escaped before interpolation. URLs are scheme-validated;
+    anything non-http(s) is rendered as plain text without a link.
     """
     lines = ["\n\n---\n", "{{< sources >}}"]
     for category, articles in news.items():
         for a in articles[:ARTICLES_PER_CATEGORY]:
-            if a.url:
-                lines.append(f"- [{a.title}]({a.url}) — *{a.source}*")
+            title = _escape_md_inline(a.title)
+            source = _escape_md_inline(a.source)
+            safe_url = _safe_source_url(a.url)
+            if safe_url:
+                lines.append(f"- [{title}](<{safe_url}>) — *{source}*")
             else:
-                lines.append(f"- {a.title} — *{a.source}*")
+                if a.url:
+                    logger.warning(
+                        f"Rejecting unsafe source URL, emitting title as plain text: {a.url!r}"
+                    )
+                lines.append(f"- {title} — *{source}*")
     lines.append("{{< /sources >}}")
     return "\n".join(lines)
 
