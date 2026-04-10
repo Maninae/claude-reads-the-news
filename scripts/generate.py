@@ -345,9 +345,9 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
         today = datetime.now(ZoneInfo(TIMEZONE))
         return {
             "title": f"Entry for {today.strftime('%B %-d, %Y')}",
-            "mood_score": 5,
-            "mood_color": "#8B6914",
-            "topics": ["wildcard"],
+            "mood_score": _DEFAULT_MOOD_SCORE,
+            "mood_color": _DEFAULT_MOOD_COLOR,
+            "topics": list(_DEFAULT_TOPICS),
         }, text
 
     # Use python-frontmatter for robust parsing (handles --- in body text)
@@ -368,6 +368,33 @@ _SOURCE_MD_ESCAPE_RE = re.compile("([" + re.escape(_SOURCE_MD_META_CHARS) + "])"
 # a pathological/adversarial payload, not a legitimate article link.
 _MAX_SOURCE_URL_LEN = 2048
 
+# mood_color is interpolated into inline `style="background-color: …"`
+# attributes in three Hugo templates (archive, list, single). Without
+# validation, a hostile value such as
+#   red; } .entry-mood-strip::before { content: url(https://evil/beacon); } .x {
+# would break out of the declaration and inject CSS — a fetch primitive
+# under the current CSP (`style-src 'self' 'unsafe-inline'`). We validate
+# *structurally* rather than by denylist: if the value is not a plain hex
+# color literal it is dropped entirely.
+_MOOD_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+_DEFAULT_MOOD_COLOR = "#8B6914"
+
+# mood_score is a numeric frontmatter field rendered into the mood chart
+# data island as a JSON number. Range matches the persona prompt (1 heavy
+# → 10 light). Out-of-range or wrong-type values are coerced to the
+# midpoint default rather than raising.
+_MOOD_SCORE_MIN = 1
+_MOOD_SCORE_MAX = 10
+_DEFAULT_MOOD_SCORE = 5
+
+# topics is rendered as a list of badges on each post card and drives
+# taxonomy. The allowed set is fixed by the persona prompt
+# (scripts/persona.py:116). Unknown entries are dropped rather than
+# substituted — if the whole list filters to empty, fall back to the
+# canonical "wildcard" catch-all.
+_ALLOWED_TOPICS = frozenset(("politics", "markets", "energy", "tech", "wildcard"))
+_DEFAULT_TOPICS: tuple[str, ...] = ("wildcard",)
+
 
 def _escape_md_inline(text: str) -> str:
     """Backslash-escape CommonMark inline metacharacters and collapse whitespace.
@@ -385,6 +412,83 @@ def _escape_md_inline(text: str) -> str:
         return ""
     escaped = _SOURCE_MD_ESCAPE_RE.sub(r"\\\1", text)
     return re.sub(r"\s+", " ", escaped).strip()
+
+
+def _validate_mood_color(value: object) -> str:
+    """Return value if it is a plain hex color literal, else the default.
+
+    Accepts ``#`` followed by 3-8 hex digits (covers ``#RGB``, ``#RGBA``,
+    ``#RRGGBB``, ``#RRGGBBAA`` plus the non-standard 5/7-digit lengths
+    that browsers ignore). Uses ``fullmatch`` so a trailing newline or
+    second color declaration cannot sneak past the anchors. Anything
+    that is not a string, or contains any character outside the hex
+    alphabet, is logged and replaced with ``_DEFAULT_MOOD_COLOR``.
+    """
+    if isinstance(value, str) and _MOOD_COLOR_RE.fullmatch(value):
+        return value
+    logger.warning(
+        f"Invalid mood_color {value!r}, falling back to {_DEFAULT_MOOD_COLOR}"
+    )
+    return _DEFAULT_MOOD_COLOR
+
+
+def _validate_mood_score(value: object) -> int:
+    """Return value if it is an int in ``[_MOOD_SCORE_MIN, _MOOD_SCORE_MAX]``.
+
+    Booleans are rejected even though ``isinstance(True, int)`` is True in
+    Python — a ``mood_score: true`` would otherwise be coerced to 1.
+    Floats, strings, and everything else fall back to the default with a
+    warning.
+    """
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and _MOOD_SCORE_MIN <= value <= _MOOD_SCORE_MAX
+    ):
+        return value
+    logger.warning(
+        f"Invalid mood_score {value!r}, falling back to {_DEFAULT_MOOD_SCORE}"
+    )
+    return _DEFAULT_MOOD_SCORE
+
+
+def _validate_topics(value: object) -> list[str]:
+    """Filter ``value`` down to a list of allowed topic strings.
+
+    Rules:
+    - ``value`` must be a list. Anything else → default.
+    - Each item must be a ``str`` in ``_ALLOWED_TOPICS``. Non-string items
+      and out-of-set strings are dropped and logged individually.
+    - Duplicates are de-duped in a single pass while preserving order so
+      the badge list matches the author's original ranking.
+    - If the filtered result is empty, fall back to ``_DEFAULT_TOPICS``.
+    """
+    if not isinstance(value, list):
+        logger.warning(
+            f"Invalid topics {value!r} (not a list), falling back to {list(_DEFAULT_TOPICS)}"
+        )
+        return list(_DEFAULT_TOPICS)
+
+    seen: set[str] = set()
+    filtered: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            logger.warning(f"Dropping non-string topic {item!r}")
+            continue
+        if item not in _ALLOWED_TOPICS:
+            logger.warning(f"Dropping unknown topic {item!r}")
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        filtered.append(item)
+
+    if not filtered:
+        logger.warning(
+            f"All topics dropped, falling back to {list(_DEFAULT_TOPICS)}"
+        )
+        return list(_DEFAULT_TOPICS)
+    return filtered
 
 
 def _safe_source_url(url: str) -> str | None:
@@ -457,14 +561,17 @@ def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
     date_str = today.strftime("%Y-%m-%d")
     time_str = today.isoformat()
 
-    # Build Hugo frontmatter
+    # Build Hugo frontmatter. Every attacker-influenced field is run through
+    # a structural validator at this boundary — the `.md` file on disk never
+    # contains an un-validated value, so downstream template and JS contexts
+    # are safe by construction.
     fm = {
         "title": frontmatter.get("title", f"Entry for {today.strftime('%B %-d, %Y')}"),
         "date": time_str,
         "model": MODEL,
-        "mood_color": frontmatter.get("mood_color", "#8B6914"),
-        "mood_score": frontmatter.get("mood_score", 5),
-        "topics": frontmatter.get("topics", ["wildcard"]),
+        "mood_color": _validate_mood_color(frontmatter.get("mood_color")),
+        "mood_score": _validate_mood_score(frontmatter.get("mood_score")),
+        "topics": _validate_topics(frontmatter.get("topics")),
         "draft": False,
     }
 
