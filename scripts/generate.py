@@ -669,7 +669,7 @@ def git_commit_and_push(filepath: Path) -> bool:
     today = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        _run_git("add", "content/posts/", "data/")
+        _run_git("add", "content/posts/")
         # Check if there are staged changes before committing
         status = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
