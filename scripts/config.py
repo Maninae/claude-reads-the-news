@@ -23,7 +23,7 @@ TIMEZONE = LOCAL_CONFIG.get("timezone", "America/Los_Angeles")
 # Anthropic API
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-opus-4-6-20250219"
-MAX_TOKENS = 4096
+MAX_TOKENS = 1024
 TEMPERATURE = 1.0  # Default — Opus 4.6 produces best creative writing at 1.0
 
 # News sources — RSS feeds that actually work and give usable content
@@ -64,17 +64,3 @@ MEMORY_ENTRIES = 5
 
 # Topics to cover
 TOPICS = ["politics", "markets", "energy", "tech", "wildcard"]
-
-# Mood colors for the mood strip
-MOOD_COLORS = {
-    1: "#8B0000",   # Deep red — extreme anxiety
-    2: "#c45d3e",   # Burnt orange — high anxiety
-    3: "#c45d3e",   # Burnt orange — anxious
-    4: "#B8860B",   # Dark goldenrod — uneasy
-    5: "#8B6914",   # Muted gold — contemplative
-    6: "#7A8B6F",   # Sage-gray — cautious
-    7: "#6b8f71",   # Muted sage — cautiously hopeful
-    8: "#6b8f71",   # Muted sage — hopeful
-    9: "#4A7C59",   # Forest green — genuinely optimistic
-    10: "#2E8B57",  # Sea green — rare calm
-}
