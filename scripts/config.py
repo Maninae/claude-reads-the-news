@@ -1,7 +1,6 @@
 """Configuration for The Watcher daily generation."""
 
 import json
-import os
 from pathlib import Path
 
 # Paths
@@ -20,11 +19,9 @@ if _local_config_path.exists():
 
 TIMEZONE = LOCAL_CONFIG.get("timezone", "America/Los_Angeles")
 
-# Anthropic API
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-opus-4-6-20250219"
-MAX_TOKENS = 1024
-TEMPERATURE = 1.0  # Default — Opus 4.6 produces best creative writing at 1.0
+# Model config — uses claude CLI (subscription), not direct API
+MODEL = "sonnet"
+MODEL_DISPLAY = "Claude Sonnet 4.6"
 
 # News sources — RSS feeds that actually work and give usable content
 # Mix of direct outlet RSS + Google News topic feeds (free, unlimited, no API key)

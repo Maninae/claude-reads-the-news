@@ -3,7 +3,6 @@ local.json
 com.aijournal.daily.plist
 
 # Environment
-.env
 venv/
 __pycache__/
 

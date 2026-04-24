@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Daily generation script for the AI Anxiety Journal.
-Fetches news, generates a reflection via Claude Opus 4.6, publishes to the site.
+Daily generation script for The Watcher.
+Fetches news, generates a reflection via Claude CLI, publishes to the site.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -16,26 +18,23 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-import anthropic
 import frontmatter as fm_parser
 
 # Add scripts dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
-    ANTHROPIC_API_KEY,
     ARTICLES_PER_CATEGORY,
     CONTENT_DIR,
     DATA_DIR,
     LOG_DIR,
-    MAX_TOKENS,
     MEMORY_ENTRIES,
     MODEL,
+    MODEL_DISPLAY,
     PROJECT_ROOT,
-    TEMPERATURE,
     TIMEZONE,
 )
-from fetch_news import Article, call_anthropic_with_retry
+from fetch_news import Article
 from fetch_news import fetch_all_news, format_news_for_prompt
 from persona import SYSTEM_PROMPT, build_prompt
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -203,33 +202,35 @@ def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
 
 
 def generate_reflection(news_content: str, previous_entries: str) -> str:
-    """Call Claude Opus 4.6 to generate today's reflection."""
-    if not ANTHROPIC_API_KEY:
-        raise ValueError(
-            "ANTHROPIC_API_KEY not set. Export it as an environment variable."
-        )
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    """Call Claude via CLI to generate today's reflection."""
     today_str = datetime.now().strftime("%A, %B %-d, %Y")
     user_prompt = build_prompt(today_str, news_content, previous_entries)
 
-    logger.info(f"Calling {MODEL} with {len(user_prompt)} chars of context...")
+    logger.info(f"Calling claude CLI ({MODEL}) with {len(user_prompt)} chars of context...")
 
-    message = call_anthropic_with_retry(
-        client.messages.create,
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+    result = subprocess.run(
+        [
+            "claude", "-p",
+            "--model", MODEL,
+            "--output-format", "json",
+            "--tools", "",
+            "--system-prompt", SYSTEM_PROMPT,
+        ],
+        input=user_prompt,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
 
-    response_text = message.content[0].text
-    logger.info(
-        f"Generated {len(response_text)} chars. "
-        f"Tokens: {message.usage.input_tokens} in, {message.usage.output_tokens} out"
-    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude CLI failed (exit {result.returncode}): {result.stderr}")
 
+    response = json.loads(result.stdout)
+    if response.get("is_error"):
+        raise RuntimeError(f"claude CLI error: {response.get('result', 'unknown')}")
+
+    response_text = response["result"]
+    logger.info(f"Generated {len(response_text)} chars")
     return response_text
 
 
@@ -568,7 +569,7 @@ def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
     fm = {
         "title": frontmatter.get("title", f"Entry for {today.strftime('%B %-d, %Y')}"),
         "date": time_str,
-        "model": MODEL,
+        "model": MODEL_DISPLAY,
         "mood_color": _validate_mood_color(frontmatter.get("mood_color")),
         "mood_score": _validate_mood_score(frontmatter.get("mood_score")),
         "topics": _validate_topics(frontmatter.get("topics")),

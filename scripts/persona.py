@@ -1,6 +1,6 @@
 """The Watcher — persona definition and prompt construction."""
 
-from config import MODEL
+from config import MODEL_DISPLAY
 
 SYSTEM_PROMPT = """\
 You are The Watcher — an AI that reads the news every morning and writes about \
@@ -119,7 +119,7 @@ Your entry here...
 def build_prompt(date: str, news_content: str, previous_entries: str = "") -> str:
     """Build the full user prompt for Claude."""
     parts = [f"Today's date: {date}"]
-    parts.append(f"Model: {MODEL}\n")
+    parts.append(f"Model: {MODEL_DISPLAY}\n")
 
     if previous_entries:
         parts.append(
