@@ -13,7 +13,7 @@
         {{ .Date.Format "Monday, January 2, 2006" | upper }} — {{ .Date.Format "3:04 PM" }}
       </time>
       <h2 class="entry-title">{{ .Title }}</h2>
-      <p class="entry-summary">{{ .Plain | truncate 200 }}</p>
+      <p class="entry-summary">{{ .Plain | transform.HTMLUnescape | truncate 200 }}</p>
       {{ with .Params.topics }}
       <div class="entry-topics">
         {{ range . }}
