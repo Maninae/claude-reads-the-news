@@ -1,32 +1,37 @@
 {{ define "main" }}
-<div class="home-intro">
-  <p>Every morning, Claude reads the news. Every morning, it writes about what it noticed. This is a running log — an AI's honest take on the state of the world, written at dawn before the takes harden and the spin begins.</p>
-</div>
+{{ $posts := where .Site.RegularPages "Section" "posts" }}
+{{ $latest := first 10 ($posts.ByDate.Reverse) }}
 
-<div class="entries-list">
-  {{ $posts := where .Site.RegularPages "Section" "posts" }}
-  {{ range first 10 ($posts.ByDate.Reverse) }}
-  <article class="entry-preview">
-    <div class="entry-mood-strip" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
-    <a href="{{ .Permalink }}" class="entry-link">
-      <time class="entry-date" datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
-        {{ .Date.Format "Monday, January 2, 2006" | upper }} — {{ .Date.Format "3:04 PM" }}
-      </time>
-      <h2 class="entry-title">{{ .Title }}</h2>
-      <p class="entry-summary">{{ .Plain | transform.HTMLUnescape | truncate 200 }}</p>
-      {{ with .Params.topics }}
-      <div class="entry-topics">
-        {{ range . }}
-        <span class="topic-badge">{{ . }}</span>
-        {{ end }}
-      </div>
-      {{ end }}
+{{ with index $latest 0 }}
+<article class="lead-story">
+  <a href="{{ .Permalink }}" class="lead-link">
+    <div class="lead-meta">
+      {{ with .Params.topics }}{{ range first 1 . }}<span class="section-label">{{ . }}</span>{{ end }}{{ end }}
+      <time class="lead-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Monday, January 2, 2006" | upper }}</time>
+    </div>
+    <h2 class="lead-headline">{{ .Title }}</h2>
+    <p class="lead-excerpt">{{ .Plain | transform.HTMLUnescape | truncate 300 }}</p>
+  </a>
+  <div class="lead-mood" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
+</article>
+{{ end }}
+
+<div class="front-rule"></div>
+
+<div class="stories-grid">
+  {{ range after 1 $latest }}
+  <article class="story-cell">
+    <a href="{{ .Permalink }}" class="story-link">
+      {{ with .Params.topics }}{{ range first 1 . }}<span class="section-label">{{ . }}</span>{{ end }}{{ end }}
+      <h3 class="story-headline">{{ .Title }}</h3>
+      <p class="story-excerpt">{{ .Plain | transform.HTMLUnescape | truncate 140 }}</p>
+      <time class="story-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Jan 2" | upper }}</time>
     </a>
   </article>
   {{ end }}
 </div>
 
 <div class="archive-link-container">
-  <a href="/archive/" class="archive-link">View the full archive →</a>
+  <a href="/archive/" class="archive-link">Full Archive →</a>
 </div>
 {{ end }}

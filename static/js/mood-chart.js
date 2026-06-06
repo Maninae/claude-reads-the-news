@@ -1,10 +1,8 @@
 // Mood chart initialization for /archive/.
 //
 // Data is injected by Hugo into a <script id="mood-data" type="application/json">
-// block (not executable under CSP). This file — loaded from /js/ which matches
-// the CSP script-src 'self' allowlist — reads that blob and renders the chart.
-// Chart.js must be loaded before this script (the archive template includes
-// the jsDelivr <script> tag immediately before this one).
+// block. This file reads that blob and renders the chart. Chart.js must be
+// loaded before this script.
 
 (function () {
   function init() {
@@ -24,6 +22,15 @@
       return;
     }
 
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var tickColor = isDark ? '#6a6259' : '#9a958e';
+    var gridMajor = isDark ? 'rgba(224, 213, 193, 0.08)' : 'rgba(26, 24, 23, 0.06)';
+    var gridMinor = isDark ? 'rgba(224, 213, 193, 0.04)' : 'rgba(26, 24, 23, 0.04)';
+    var tooltipBg = isDark ? '#2a2520' : '#1a1817';
+    var tooltipText = isDark ? '#ddd5c4' : '#f8f7f4';
+    var accentColor = isDark ? '#d97a5e' : '#c45d3e';
+    var fillColor = isDark ? 'rgba(217, 122, 94, 0.1)' : 'rgba(196, 93, 62, 0.08)';
+
     var labels = data.map(function (d) { return d.date; });
     var scores = data.map(function (d) { return d.score; });
     var colors = data.map(function (d) { return d.color; });
@@ -35,8 +42,8 @@
         datasets: [{
           label: 'Mood Score',
           data: scores,
-          borderColor: '#c45d3e',
-          backgroundColor: 'rgba(196, 93, 62, 0.1)',
+          borderColor: accentColor,
+          backgroundColor: fillColor,
           borderWidth: 2,
           pointBackgroundColor: colors,
           pointBorderColor: colors,
@@ -55,7 +62,7 @@
             min: 0,
             max: 10,
             ticks: {
-              color: '#4a4a4a',
+              color: tickColor,
               font: { family: 'JetBrains Mono', size: 11 },
               stepSize: 2,
               callback: function (value) {
@@ -70,23 +77,23 @@
                 return moodLabels[value] || '';
               }
             },
-            grid: { color: 'rgba(74, 74, 74, 0.3)' }
+            grid: { color: gridMajor }
           },
           x: {
             ticks: {
-              color: '#4a4a4a',
+              color: tickColor,
               font: { family: 'JetBrains Mono', size: 11 }
             },
-            grid: { color: 'rgba(74, 74, 74, 0.15)' }
+            grid: { color: gridMinor }
           }
         },
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1a1a1a',
-            titleColor: '#e0d5c1',
-            bodyColor: '#e0d5c1',
-            borderColor: '#4a4a4a',
+            backgroundColor: tooltipBg,
+            titleColor: tooltipText,
+            bodyColor: tooltipText,
+            borderColor: isDark ? '#3a3835' : '#3a3835',
             borderWidth: 1,
             titleFont: { family: 'Source Serif 4' },
             bodyFont: { family: 'JetBrains Mono', size: 12 },

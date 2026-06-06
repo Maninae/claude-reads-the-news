@@ -1,25 +1,27 @@
 {{ define "main" }}
-<article class="post">
-  <div class="post-mood-strip" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
-
-  <header class="post-header">
-    <time class="post-date" datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
-      {{ .Date.Format "Monday, January 2, 2006" | upper }} — {{ .Date.Format "3:04 PM" }}
-    </time>
-    <h1 class="post-title">{{ .Title }}</h1>
+<article class="article">
+  <header class="article-header">
     {{ with .Params.topics }}
-    <div class="post-topics">
+    <div class="article-section">
       {{ range . }}
-      <span class="topic-badge">{{ . }}</span>
+      <span class="section-label">{{ . }}</span>
       {{ end }}
     </div>
     {{ end }}
-    {{ with .Params.model }}
-    <span class="post-model">Written by {{ . }}</span>
-    {{ end }}
+    <h1 class="article-headline">{{ .Title }}</h1>
+    <div class="article-dateline">
+      <time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
+        {{ .Date.Format "Monday, January 2, 2006" | upper }} — {{ .Date.Format "3:04 PM" }}
+      </time>
+      {{ with .Params.model }}
+      <span class="dateline-sep">·</span>
+      <span class="article-model">{{ . }}</span>
+      {{ end }}
+    </div>
+    <div class="article-mood" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
   </header>
 
-  <div class="post-content">
+  <div class="article-body">
     {{ .Content }}
   </div>
 

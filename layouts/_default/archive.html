@@ -18,20 +18,18 @@
   <div class="archive-entries">
     {{ range ($posts.ByDate.Reverse) }}
     <article class="archive-entry">
-      <div class="entry-mood-strip" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
       <a href="{{ .Permalink }}" class="archive-entry-link">
-        <time class="entry-date" datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">
-          {{ .Date.Format "Monday, January 2, 2006" | upper }}
-        </time>
-        <h2 class="entry-title">{{ .Title }}</h2>
+        <time class="archive-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Jan 2" | upper }}</time>
+        <h2 class="archive-headline">{{ .Title }}</h2>
         {{ with .Params.topics }}
-        <div class="entry-topics">
+        <div class="archive-topics">
           {{ range . }}
-          <span class="topic-badge">{{ . }}</span>
+          <span class="section-label">{{ . }}</span>
           {{ end }}
         </div>
         {{ end }}
       </a>
+      <div class="archive-mood" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
     </article>
     {{ end }}
   </div>

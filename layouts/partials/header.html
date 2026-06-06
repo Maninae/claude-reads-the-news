@@ -1,8 +1,9 @@
-<header class="site-header">
-  <nav class="site-nav">
-    <a href="/" class="site-title-link">
-      <h1 class="site-title">{{ .Site.Title }}</h1>
-    </a>
-    <p class="site-subtitle">{{ .Site.Params.description }}</p>
-  </nav>
+<header class="masthead">
+  <div class="masthead-rule"></div>
+  <a href="/" class="masthead-link">
+    <h1 class="masthead-title">{{ .Site.Title }}</h1>
+  </a>
+  <p class="masthead-tagline">{{ .Site.Params.description }}</p>
+  <div class="masthead-rule"></div>
+  <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
 </header>
