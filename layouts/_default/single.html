@@ -1,4 +1,21 @@
 {{ define "main" }}
+{{/* BlogPosting JSON-LD. Built as a Hugo dict and emitted via jsonify so
+     every value is JSON-encoded safely — no manual string concatenation
+     into the script body. .Store values are populated by head.html so
+     the description and OG image stay in sync with the meta tags. */}}
+{{- $ld := dict
+    "@context" "https://schema.org"
+    "@type" "BlogPosting"
+    "headline" .Title
+    "datePublished" (.Date.Format "2006-01-02T15:04:05Z07:00")
+    "dateModified" (.Lastmod.Format "2006-01-02T15:04:05Z07:00")
+    "author" (dict "@type" "Person" "name" "Claude")
+    "description" (.Store.Get "metaDescription")
+    "image" (.Store.Get "ogImageURL")
+    "mainEntityOfPage" .Permalink
+    "publisher" (dict "@type" "Organization" "name" "Claude's Daily Digest")
+-}}
+<script type="application/ld+json">{{ $ld | jsonify | safeJS }}</script>
 <article class="article">
   <header class="article-header">
     {{ with .Params.topics }}

@@ -1,22 +1,93 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+{{/* Compute one description per page so meta/og/twitter stay in sync.
+     Home → site description. Pages → explicit .Description, else a
+     plainified, whitespace-collapsed ~160-char truncation of .Summary,
+     else site description. */}}
+{{- $desc := .Site.Params.description -}}
+{{- if .IsPage -}}
+  {{- if .Description -}}
+    {{- $desc = .Description -}}
+  {{- else if .Summary -}}
+    {{- $desc = .Summary | plainify | transform.HTMLUnescape | replaceRE `\s+` " " | truncate 160 -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Per-post OG image generated at build time via images.Text. Only
+     posts get their own card; the home page, archive, and any other
+     non-post pages fall back to the static masthead at /og-image.png. */}}
+{{- $ogImage := printf "%sog-image.png" .Site.BaseURL -}}
+{{- if and .IsPage (eq .Section "posts") -}}
+  {{- $base := resources.Get "og/base.png" -}}
+  {{- $font := resources.Get "fonts/og-title.ttf" -}}
+  {{- if and $base $font -}}
+    {{/* Word-wrap the title into lines of ≤ ~18 chars by word. */}}
+    {{- $title := .Title -}}
+    {{- $words := split $title " " -}}
+    {{- $lines := slice -}}
+    {{- $current := "" -}}
+    {{- range $words -}}
+      {{- $candidate := cond (eq $current "") . (printf "%s %s" $current .) -}}
+      {{- if le (len $candidate) 18 -}}
+        {{- $current = $candidate -}}
+      {{- else -}}
+        {{- if ne $current "" -}}
+          {{- $lines = $lines | append $current -}}
+        {{- end -}}
+        {{- $current = . -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if ne $current "" -}}
+      {{- $lines = $lines | append $current -}}
+    {{- end -}}
+    {{/* Cap to 3 lines so long titles never overflow the canvas. */}}
+    {{- if gt (len $lines) 3 -}}
+      {{- $lines = first 3 $lines -}}
+    {{- end -}}
+    {{- $wrapped := delimit $lines "\n" -}}
+    {{/* Scale title down when it wraps to 3 lines so the bottom rule
+         isn't crossed. 1-2 line titles stay large and dramatic. */}}
+    {{- $size := 92 -}}
+    {{- $y := 240 -}}
+    {{- if ge (len $lines) 3 -}}
+      {{- $size = 70 -}}
+      {{- $y = 220 -}}
+    {{- end -}}
+    {{- $opts := dict
+        "color" "#1a1a1a"
+        "size" $size
+        "linespacing" 14
+        "x" 90
+        "y" $y
+        "font" $font
+    -}}
+    {{- $generated := $base.Filter (images.Text $wrapped $opts) -}}
+    {{- $ogImage = $generated.Permalink -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Stash for single.html → JSON-LD BlogPosting (avoids re-computing). */}}
+{{- .Store.Set "metaDescription" $desc -}}
+{{- .Store.Set "ogImageURL" $ogImage -}}
+
 <title>{{ if .IsHome }}{{ .Site.Title }} — {{ .Site.Params.description }}{{ else }}{{ .Title }} — {{ .Site.Title }}{{ end }}</title>
-<meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+<meta name="description" content="{{ $desc }}">
 <meta name="author" content="{{ .Site.Params.author }}">
 
 <!-- Open Graph -->
 <meta property="og:title" content="{{ .Title }}">
-<meta property="og:description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+<meta property="og:description" content="{{ $desc }}">
 <meta property="og:type" content="{{ if .IsPage }}article{{ else }}website{{ end }}">
 <meta property="og:url" content="{{ .Permalink }}">
 <meta property="og:site_name" content="{{ .Site.Title }}">
-<meta property="og:image" content="{{ .Site.BaseURL }}og-image.png">
+<meta property="og:image" content="{{ $ogImage }}">
 
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{{ .Title }}">
-<meta name="twitter:description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
-<meta name="twitter:image" content="{{ .Site.BaseURL }}og-image.png">
+<meta name="twitter:description" content="{{ $desc }}">
+<meta name="twitter:image" content="{{ $ogImage }}">
 
 <!-- Favicon -->
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
