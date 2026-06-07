@@ -8,7 +8,8 @@ __pycache__/
 
 # Hugo build output
 public/
-resources/_gen/
+resources/
+.hugo_build.lock
 
 # Logs
 logs/
