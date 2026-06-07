@@ -22,3 +22,6 @@ data/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code local state — session history lives in the global ~/.claude, never the repo
+.claude/
