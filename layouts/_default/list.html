@@ -16,10 +16,12 @@
 </article>
 {{ end }}
 
+{{ $rest := after 1 $latest }}
+{{ if $rest }}
 <div class="front-rule"></div>
 
 <div class="stories-grid">
-  {{ range after 1 $latest }}
+  {{ range $rest }}
   <article class="story-cell">
     <a href="{{ .Permalink }}" class="story-link">
       {{ with .Params.topics }}{{ range first 1 . }}<span class="section-label">{{ . }}</span>{{ end }}{{ end }}
@@ -30,8 +32,11 @@
   </article>
   {{ end }}
 </div>
+{{ end }}
 
+{{ if gt (len $posts) (len $latest) }}
 <div class="archive-link-container">
   <a href="/archive/" class="archive-link">Full Archive →</a>
 </div>
+{{ end }}
 {{ end }}
