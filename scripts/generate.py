@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Daily generation script for The Watcher.
+Daily generation script for Claude's Daily Digest.
 Fetches news, generates a reflection via Claude CLI, publishes to the site.
 """
 
@@ -396,6 +396,18 @@ _DEFAULT_MOOD_SCORE = 5
 _ALLOWED_TOPICS = frozenset(("politics", "markets", "energy", "tech", "wildcard"))
 _DEFAULT_TOPICS: tuple[str, ...] = ("wildcard",)
 
+# description is rendered into <meta name="description">, og:description, and
+# twitter:description by layouts/partials/head.html, plus the JSON-LD
+# BlogPosting block. Hugo auto-escapes meta `content` attributes and
+# `jsonify` safely encodes JSON values, so HTML-escaping here would
+# double-escape; we only need to coerce to a string, collapse whitespace,
+# and bound the length. The full raw response has already passed
+# `_reject_dangerous_html`, which catches the actual attack vectors.
+# 160 chars is the conventional SEO sweet spot — slightly above the
+# 155-char target in the persona prompt so a perfectly-sized model
+# response isn't truncated mid-word.
+_MAX_DESCRIPTION_LEN = 160
+
 
 def _escape_md_inline(text: str) -> str:
     """Backslash-escape CommonMark inline metacharacters and collapse whitespace.
@@ -492,6 +504,45 @@ def _validate_topics(value: object) -> list[str]:
     return filtered
 
 
+def _first_sentence(text: str, window: int = 200) -> str:
+    """Return the first sentence of `text` (looking only at the first `window` chars).
+
+    Used as the fallback when the model omits or empties the description.
+    A "sentence" ends at the first ``. `` (period-space) inside the window;
+    if none is found, the whole window is returned. Newlines are collapsed
+    so a multi-line first paragraph still yields one clean string.
+    """
+    if not text:
+        return ""
+    head = re.sub(r"\s+", " ", text.strip())[:window]
+    end = head.find(". ")
+    if end > 0:
+        return head[: end + 1]
+    return head
+
+
+def _validate_description(value: object, body: str = "") -> str:
+    """Return a safe meta-description string, falling back to the body if empty.
+
+    Rules:
+    - Non-strings → fall back to first sentence of `body` (or "" if none).
+    - Strip surrounding whitespace and collapse internal whitespace
+      (including newlines, which would break the meta `content` attr).
+    - Truncate to ``_MAX_DESCRIPTION_LEN`` chars.
+    - If the result is empty after stripping, try ``body``; failing that,
+      return "" and let the template fall back to the site description.
+
+    No HTML-escaping here — Hugo escapes meta `content` attributes and
+    ``jsonify`` escapes JSON values. The raw response has already passed
+    ``_reject_dangerous_html`` for the real attack vectors.
+    """
+    candidate = value if isinstance(value, str) else ""
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if not candidate:
+        candidate = _first_sentence(body)
+    return candidate[:_MAX_DESCRIPTION_LEN]
+
+
 def _safe_source_url(url: str) -> str | None:
     """Return the URL if it is safe to embed as a markdown link target.
 
@@ -570,6 +621,7 @@ def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
         "title": frontmatter.get("title", f"Entry for {today.strftime('%B %-d, %Y')}"),
         "date": time_str,
         "model": MODEL_DISPLAY,
+        "description": _validate_description(frontmatter.get("description"), body),
         "mood_color": _validate_mood_color(frontmatter.get("mood_color")),
         "mood_score": _validate_mood_score(frontmatter.get("mood_score")),
         "topics": _validate_topics(frontmatter.get("topics")),
@@ -755,7 +807,7 @@ def main():
     Safe to re-run: resumes from the last completed stage.
     """
     logger.info("=" * 60)
-    logger.info("The Watcher — Daily Generation")
+    logger.info("Claude's Daily Digest — Daily Generation")
     logger.info("=" * 60)
 
     ensure_dirs()
