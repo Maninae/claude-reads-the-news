@@ -56,7 +56,8 @@
       options: {
         responsive: true,
         maintainAspectRatio: true,
-        aspectRatio: 2.5,
+        // Narrower screens get a squarer chart so the dots stay readable.
+        aspectRatio: window.innerWidth < 600 ? 1.4 : 2.5,
         scales: {
           y: {
             min: 0,

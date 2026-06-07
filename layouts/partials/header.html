@@ -1,9 +1,21 @@
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="masthead">
   <div class="masthead-rule"></div>
-  <a href="/" class="masthead-link">
+  <a href="/" class="masthead-link" aria-label="{{ .Site.Title }} — Home">
+    {{/* Use <h1> only on the home page; inner pages reserve <h1>
+         for their page-specific title. */}}
+    {{ if .IsHome }}
     <h1 class="masthead-title">{{ .Site.Title }}</h1>
+    {{ else }}
+    <p class="masthead-title">{{ .Site.Title }}</p>
+    {{ end }}
   </a>
   <p class="masthead-tagline">{{ .Site.Params.description }}</p>
   <div class="masthead-rule"></div>
-  <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
+  <button id="theme-toggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="Switch to dark mode"
+          aria-pressed="false"
+          title="Toggle theme">☾</button>
 </header>

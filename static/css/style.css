@@ -57,6 +57,38 @@ body {
   min-height: 100vh;
 }
 
+/* Accessibility: skip-link, only visible when focused */
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  background: var(--text);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  border-radius: 3px;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform 0.15s ease;
+  z-index: 10000;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Visible focus ring for keyboard users only */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+main:focus { outline: none; }
+
 /* ---- Newsprint Grain ---- */
 
 .noise-overlay {
@@ -156,13 +188,21 @@ body {
   border: none;
   color: var(--muted);
   font-size: 1rem;
+  font-family: var(--font-body);
   cursor: pointer;
-  padding: 0.2rem 0.3rem;
+  padding: 0.4rem 0.5rem;
   line-height: 1;
   transition: color 0.15s ease;
+  /* Larger hit target without bloating visual size */
+  min-width: 2rem;
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
   color: var(--text);
 }
 
@@ -769,8 +809,23 @@ body {
     padding: 1.5rem 1.25rem 3rem;
   }
 
+  .masthead {
+    /* Leave room for absolutely-positioned theme toggle in the corner. */
+    padding-right: 2.25rem;
+  }
+
   .masthead-title {
     font-size: 2.4rem;
+  }
+
+  .masthead-tagline {
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .theme-toggle {
+    top: 0.25rem;
+    right: -0.25rem;
   }
 
   .lead-headline {
@@ -817,6 +872,12 @@ body {
     text-align: left;
   }
 
+  .archive-entry {
+    /* Keep date + headline + mood dot on one line, but allow the
+       headline to truncate gracefully instead of breaking the row. */
+    align-items: center;
+  }
+
   .archive-entry-link {
     flex-wrap: wrap;
   }
@@ -825,8 +886,33 @@ body {
     display: none;
   }
 
+  .mood-chart-container {
+    padding: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  #moodChart {
+    max-height: 220px;
+  }
+
   .error-title {
     font-size: 3.5rem;
+  }
+}
+
+/* Extra-small phones: the masthead title is the most likely thing
+   to collide with the corner toggle. Soften further. */
+@media (max-width: 380px) {
+  .masthead-title {
+    font-size: 2rem;
+  }
+
+  .article-headline {
+    font-size: 1.5rem;
+  }
+
+  .lead-headline {
+    font-size: 1.4rem;
   }
 }
 
