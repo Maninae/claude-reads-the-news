@@ -21,14 +21,12 @@
 <!-- Favicon -->
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
-<!-- Theme (anti-FOUC: set data-theme before first paint) -->
-<script>
-(function() {
-  var t = localStorage.getItem('theme');
-  if (!t) t = 'light';
-  document.documentElement.setAttribute('data-theme', t);
-})();
-</script>
+<!--
+  Theme: external script loaded synchronously before paint.
+  Handles anti-FOUC (set data-theme on <html>) AND the toggle button.
+  Kept external so a strict CSP (script-src 'self') is sufficient.
+-->
+<script src="/js/theme.js"></script>
 
 <!-- Fonts -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -37,9 +35,6 @@
 
 <!-- CSS -->
 <link rel="stylesheet" href="/css/style.css">
-
-<!-- Theme toggle -->
-<script src="/js/theme.js" defer></script>
 
 <!-- RSS -->
 {{ with .OutputFormats.Get "RSS" }}
