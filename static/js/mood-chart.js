@@ -68,8 +68,8 @@
               stepSize: 2,
               callback: function (value) {
                 var moodLabels = {
-                  0: 'Despair',
-                  2: 'Dread',
+                  0: 'Somber',
+                  2: 'Wary',
                   4: 'Uneasy',
                   6: 'Watchful',
                   8: 'Hopeful',
