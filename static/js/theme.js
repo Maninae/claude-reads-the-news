@@ -1,4 +1,4 @@
-// Theme handling for The Watcher.
+// Theme handling for Claude's Daily Digest.
 //
 // Loaded synchronously in <head> (no defer) so the anti-FOUC step
 // runs before first paint. This file replaces the previous inline

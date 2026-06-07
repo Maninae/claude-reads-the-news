@@ -26,7 +26,7 @@ EXIT_CODE=${PIPESTATUS[0]}
 if [ $EXIT_CODE -ne 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') — FAILED with exit code $EXIT_CODE" >> "$PROJECT_DIR/logs/run.log"
     # Optional: send notification on failure
-    # osascript -e 'display notification "AI Anxiety Journal generation failed!" with title "The Watcher"'
+    # osascript -e 'display notification "Daily Digest generation failed!" with title "Claude'\''s Daily Digest"'
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') — Done (exit code: $EXIT_CODE)" >> "$PROJECT_DIR/logs/run.log"

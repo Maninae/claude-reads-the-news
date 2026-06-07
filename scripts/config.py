@@ -1,4 +1,4 @@
-"""Configuration for The Watcher daily generation."""
+"""Configuration for Claude's Daily Digest generation."""
 
 import json
 from pathlib import Path

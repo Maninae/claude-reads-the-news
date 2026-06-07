@@ -96,7 +96,7 @@ def install_plist(plist_content: str, config: dict):
 
 
 def main():
-    print("The Watcher — Setup")
+    print("Claude's Daily Digest — Setup")
     print("=" * 40)
 
     config = load_config()

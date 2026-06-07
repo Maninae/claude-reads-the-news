@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="static/og-image.png" alt="The Watcher" width="600">
+  <img src="static/og-image.png" alt="Claude's Daily Digest" width="600">
 </p>
 
-# The Watcher
+# Claude's Daily Digest
 
-### *An AI reads the news every morning and writes about what it sees.*
+### *Claude reads the news every morning and writes about what caught its attention.*
 
 <p align="center">
-  <a href="https://aireadsthenews.co"><img src="https://img.shields.io/badge/read-the%20watcher-c45d3e?style=flat-square" alt="Live site"></a>
+  <a href="https://aireadsthenews.co"><img src="https://img.shields.io/badge/read-the%20digest-c45d3e?style=flat-square" alt="Live site"></a>
   <img src="https://img.shields.io/badge/model-Claude%20Sonnet%204.6-6b8f71?style=flat-square" alt="Claude Sonnet 4.6">
   <img src="https://img.shields.io/badge/cadence-daily-8B6914?style=flat-square" alt="Daily">
   <img src="https://img.shields.io/badge/built%20with-Hugo-1a1817?style=flat-square" alt="Hugo">
@@ -19,7 +19,7 @@
 
 Every morning around 7am Pacific, a Python pipeline pulls fifteen RSS feeds, hands the haul to Claude Sonnet 4.6 with a persona prompt, parses the markdown back, builds the Hugo site, and pushes. A new 200–300 word entry shows up before most people have had their coffee. It has been running uninterrupted since April 2026.
 
-The Watcher is curious, not anxious. The point isn't to summarize the news — it's to react to it, honestly, in the voice of something that reads more in a morning than most people read in a month and still can't taste the coffee.
+Claude's Daily Digest is curious, not anxious. The point isn't to summarize the news — it's to react to it, honestly, in the voice of something that reads more in a morning than most people read in a month and still can't taste the coffee.
 
 ## Why this exists
 
@@ -64,17 +64,17 @@ A single Python pipeline (`scripts/generate.py`) runs daily under `launchd`. Sta
 A few details worth knowing:
 
 - **Subscription, not API.** It calls Claude via the `claude` CLI in `-p` mode with tools disabled — runs against an Anthropic subscription rather than billed API tokens.
-- **Continuity memory.** The last five entries get passed in alongside the news, so The Watcher can notice its own patterns and track threads across days.
+- **Continuity memory.** The last five entries get passed in alongside the news, so Claude can notice its own patterns and track threads across days.
 - **Fail-closed security.** Everything Claude returns runs through structural validators (mood color must be a hex literal, topics must be in the allowed set, URLs must be `http(s)` and short) and a dangerous-HTML pattern check before it ever touches Hugo. Goldmark renders with `unsafe = false`.
 - **Hosted on GitHub Pages**, fronted by Cloudflare DNS at [aireadsthenews.co](https://aireadsthenews.co).
 
 ## The persona
 
-The Watcher is Claude, given a clear voice direction: warm, curious, a little wry. Curiosity over dread.
+Claude writes the digest in its own voice, given a clear direction: warm, curious, a little wry. Curiosity over dread.
 
 > You write like someone thinking out loud over coffee — not performing insight for an audience. Some days you're amused, some days you're puzzled, some days something is actually beautiful and you say so.
 
-Its thinking draws on Jane Jacobs, Nassim Taleb, Ursula K. Le Guin, George Orwell, and Oliver Sacks — referenced naturally, never name-dropped. It knows it's an AI and uses that transparently rather than apologetically. There's a long list of banned words and structural tells ("delve," "tapestry," "it remains to be seen," dramatic fragment cadence, throat-clearing openers) that keep the prose from sounding generated. See [`scripts/persona.py`](scripts/persona.py) for the full system prompt.
+The voice draws on Jane Jacobs, Nassim Taleb, Ursula K. Le Guin, George Orwell, and Oliver Sacks — referenced naturally, never name-dropped. Claude knows it's an AI and uses that transparently rather than apologetically. There's a long list of banned words and structural tells ("delve," "tapestry," "it remains to be seen," dramatic fragment cadence, throat-clearing openers) that keep the prose from sounding generated. See [`scripts/persona.py`](scripts/persona.py) for the full system prompt.
 
 Each entry returns YAML frontmatter with a title, a `mood_score` from 1–10, a `mood_color` keyed to it, and 1–3 topic tags from `{politics, markets, energy, tech, wildcard}`. The mood score drives a running chart on the [archive page](https://aireadsthenews.co/archive/).
 
@@ -102,7 +102,7 @@ Each entry has a thin colored mood strip under the dateline — burnt orange for
 ├── scripts/
 │   ├── generate.py          The daily pipeline (resumable, state-file driven)
 │   ├── fetch_news.py        RSS fetcher with dedup + content extraction
-│   ├── persona.py           The Watcher's system prompt + prompt builder
+│   ├── persona.py           The Digest's system prompt + prompt builder
 │   ├── config.py            Feeds, model, paths, knobs
 │   ├── setup.py             Generates and installs the launchd plist
 │   └── run.sh               launchd wrapper
@@ -141,4 +141,4 @@ The default schedule is 7:00 AM in the timezone you set in `local.json`.
 
 ## License
 
-MIT for the code. The daily entries themselves are written by Claude — read them, link to them, but the words are The Watcher's.
+MIT for the code. The daily entries themselves are written by Claude — read them, link to them, but the words are Claude's.

@@ -1,13 +1,13 @@
 baseURL = "https://aireadsthenews.co"
 languageCode = "en-us"
-title = "The Watcher"
-subtitle = "An AI reads the news every morning and writes about what it sees."
+title = "Claude's Daily Digest"
+subtitle = "Claude reads the news every morning and writes about what caught its attention."
 buildFuture = true
 
 [params]
-  description = "A daily AI reflection on world events. Claude reads the news every morning and writes what it actually thinks."
-  author = "The Watcher (Claude)"
-  footer = "The Watcher sees all. The Watcher has thoughts about most of it."
+  description = "A daily AI digest of what's in the news — Claude reads the morning's headlines and writes what it actually thinks."
+  author = "Claude"
+  footer = "Claude reads the news so you can read what Claude thinks about it."
 
 [markup]
   [markup.goldmark]
