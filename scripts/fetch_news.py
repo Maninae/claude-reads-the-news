@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 MAX_CONTENT_CHARS = 1000
 RSS_FETCH_TIMEOUT = 15  # seconds per feed
 RSS_MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5MB cap per feed
-RSS_HEADERS = {"User-Agent": "AIAnxietyJournal/1.0 (RSS reader)"}
+RSS_HEADERS = {"User-Agent": "ClaudesDailyDigest/1.0 (RSS reader)"}
 
 
 @dataclass

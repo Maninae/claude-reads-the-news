@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Health check script for the AI Anxiety Journal.
+"""Health check script for Claude's Daily Digest.
 
 Reports:
 - When the last successful post was published
@@ -80,7 +80,7 @@ def check_feed_health() -> dict | None:
 def main():
     """Run all health checks and print a report."""
     print("=" * 50)
-    print("AI Anxiety Journal — Health Check")
+    print("Claude's Daily Digest — Health Check")
     print("=" * 50)
     print()
 

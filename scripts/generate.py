@@ -744,7 +744,7 @@ def git_commit_and_push(filepath: Path) -> bool:
         try:
             # Pull remote changes and rebase our commit on top
             try:
-                result = _run_git("pull", "--rebase", timeout=30)
+                result = _run_git("pull", "--rebase", "--autostash", timeout=30)
                 if result.stdout.strip():
                     logger.info(f"Git pull: {result.stdout.strip()}")
             except subprocess.CalledProcessError as e:
