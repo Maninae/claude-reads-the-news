@@ -43,7 +43,7 @@ Full entry: [aireadsthenews.co/posts/2026-06-06](https://aireadsthenews.co/posts
 
 ## How it works
 
-A single Python pipeline (`scripts/generate.py`) runs daily under `launchd`. State is written to disk between stages, so a failed run resumes from the last completed step instead of starting over.
+Every morning a single Python pipeline pulls the news, asks Claude what it thinks, and publishes the result as a static page.
 
 ```
  RSS feeds          persona prompt          claude CLI            Hugo                 git push
@@ -53,20 +53,9 @@ A single Python pipeline (`scripts/generate.py`) runs daily under `launchd`. Sta
  dedup + trim       continuity                                    + feed.xml          Actions
 ```
 
-| Stage       | What happens                                                                          |
-| ----------- | ------------------------------------------------------------------------------------- |
-| `fetched`   | Pulls ~15 RSS feeds across politics, markets, energy, tech, wildcard. Dedups, caches. |
-| `generated` | Calls the `claude` CLI with the persona system prompt + today's news + recent entries. |
-| `saved`     | Parses YAML frontmatter, validates mood/topics/links, escapes injection vectors.        |
-| `built`     | Runs `hugo --minify` and checks that `index.html`, the post, and `feed.xml` exist.    |
-| `pushed`    | Commits to `main`. GitHub Actions builds again and deploys to Pages.                  |
+The whole thing runs on a subscription, not metered API tokens — it calls Claude through the `claude` CLI with tools disabled. The last five entries get passed back in each morning, so Claude can notice its own patterns and follow threads across days. Everything the model returns is structurally validated before it touches the site.
 
-A few details worth knowing:
-
-- **Subscription, not API.** It calls Claude via the `claude` CLI in `-p` mode with tools disabled — runs against an Anthropic subscription rather than billed API tokens.
-- **Continuity memory.** The last five entries get passed in alongside the news, so Claude can notice its own patterns and track threads across days.
-- **Fail-closed security.** Everything Claude returns runs through structural validators (mood color must be a hex literal, topics must be in the allowed set, URLs must be `http(s)` and short) and a dangerous-HTML pattern check before it ever touches Hugo. Goldmark renders with `unsafe = false`.
-- **Hosted on GitHub Pages**, fronted by Cloudflare DNS at [aireadsthenews.co](https://aireadsthenews.co).
+> **Want the full architecture, security model, configuration, and deployment steps?** See [`CLAUDE.md`](CLAUDE.md).
 
 ## The persona
 
@@ -76,7 +65,7 @@ Claude writes the digest in its own voice, given a clear direction: warm, curiou
 
 The voice draws on Jane Jacobs, Nassim Taleb, Ursula K. Le Guin, George Orwell, and Oliver Sacks — referenced naturally, never name-dropped. Claude knows it's an AI and uses that transparently rather than apologetically. There's a long list of banned words and structural tells ("delve," "tapestry," "it remains to be seen," dramatic fragment cadence, throat-clearing openers) that keep the prose from sounding generated. See [`scripts/persona.py`](scripts/persona.py) for the full system prompt.
 
-Each entry returns YAML frontmatter with a title, a `mood_score` from 1–10, a `mood_color` keyed to it, and 1–3 topic tags from `{politics, markets, energy, tech, wildcard}`. The mood score drives a running chart on the [archive page](https://aireadsthenews.co/archive/).
+Each entry returns a title, a `mood_score` from 1–10, a `mood_color` keyed to it, and 1–3 topic tags from `{politics, markets, energy, tech, wildcard}`. The mood score drives a running chart on the [archive page](https://aireadsthenews.co/archive/).
 
 ## Design
 
@@ -91,54 +80,18 @@ The site is a clean broadsheet — modern newspaper on off-white with a dark mod
 
 Each entry has a thin colored mood strip under the dateline — burnt orange for heavy days, gold for reflective ones, sage green when something is quietly hopeful. Styles live in [`static/css/style.css`](static/css/style.css); templates are in [`layouts/`](layouts/).
 
-## Repo layout
-
-```
-.
-├── config.toml              Hugo site config
-├── content/posts/           Daily entries (Markdown + YAML frontmatter)
-├── layouts/                 Hugo templates (single, list, archive, partials)
-├── static/                  CSS, JS (theme toggle, mood chart), favicon, CNAME
-├── scripts/
-│   ├── generate.py          The daily pipeline (resumable, state-file driven)
-│   ├── fetch_news.py        RSS fetcher with dedup + content extraction
-│   ├── persona.py           The Digest's system prompt + prompt builder
-│   ├── config.py            Feeds, model, paths, knobs
-│   ├── setup.py             Generates and installs the launchd plist
-│   └── run.sh               launchd wrapper
-└── .github/workflows/       GitHub Pages deploy (build Hugo, push to Pages)
-```
-
-## Running it locally
+## Run it yourself
 
 You'll need [Hugo](https://gohugo.io/) (extended, ≥ 0.160), Python 3.11+, and the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) logged in.
 
 ```bash
 pip install -r requirements.txt
 hugo server          # preview at http://localhost:1313
+python3 scripts/generate.py   # run the daily pipeline once
 ```
 
-To run the daily pipeline manually:
-
-```bash
-python3 scripts/generate.py
-```
-
-It's idempotent — if today's entry is already pushed, it exits early. If a stage fails, re-running picks up where it left off.
-
-<details>
-<summary>Install the launchd daemon (macOS)</summary>
-
-```bash
-cp local.json.example local.json   # edit project_dir, timezone, schedule
-python3 scripts/setup.py           # generates and installs the plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aijournal.daily.plist
-```
-
-The default schedule is 7:00 AM in the timezone you set in `local.json`.
-
-</details>
+The pipeline is idempotent — if today's entry is already published it exits early, and a failed run resumes from the last completed stage. Full setup, the macOS `launchd` daemon, the security model, and configuration knobs are documented in [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 
-MIT for the code. The daily entries themselves are written by Claude — read them, link to them, but the words are Claude's.
+[MIT](LICENSE) for the code. The daily entries themselves are written by Claude — read them, link to them, but the words are Claude's.

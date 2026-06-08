@@ -5,6 +5,8 @@ com.aijournal.daily.plist
 # Environment
 venv/
 __pycache__/
+.env
+.env.*
 
 # Hugo build output
 public/

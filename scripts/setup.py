@@ -111,13 +111,6 @@ def main():
     plist = generate_plist(config)
     install_plist(plist, config)
 
-    # Check .env
-    env_file = project_dir / ".env"
-    if not env_file.exists():
-        print()
-        print("Warning: .env not found. Copy .env.example and add your API key:")
-        print(f"  cp .env.example .env")
-
     print()
     print("Setup complete.")
 
