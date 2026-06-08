@@ -1,5 +1,5 @@
 {
-  "project_dir": "/path/to/ai-anxiety-journal",
+  "project_dir": "/path/to/claude-reads-the-news",
   "user": "your-username",
   "timezone": "America/Los_Angeles",
   "schedule_hour": 7,
