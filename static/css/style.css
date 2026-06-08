@@ -342,6 +342,70 @@ main:focus { outline: none; }
   color: var(--text);
 }
 
+/* The home page now uses infinite scroll. The "Browse the full archive"
+   link is kept available for its mood chart, but lives in a quieter
+   position beneath the grid. */
+.front-archive-link {
+  margin-top: 2.25rem;
+  padding-top: 1.25rem;
+  text-align: center;
+}
+
+/* ======================================
+   FRONT PAGE — Infinite Scroll
+   ====================================== */
+
+/* Cells start visible (no-JS / pre-JS). feed.js adds .story-cell--hidden
+   to the overflow on load, then removes it batch-by-batch on scroll. */
+.story-cell--hidden {
+  display: none;
+}
+
+.story-cell--revealing {
+  animation: storyCellReveal 0.45s ease-out both;
+}
+
+@keyframes storyCellReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.feed-status {
+  min-height: 1.1rem;
+  margin-top: 1.25rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.feed-status:empty {
+  /* Keep height stable so the layout doesn't twitch as text comes/goes. */
+  visibility: hidden;
+}
+
+.feed-sentinel {
+  /* Invisible probe for the IntersectionObserver. Slightly taller than 1px
+     so observers using small thresholds reliably catch it on slow scrolls. */
+  width: 100%;
+  height: 1px;
+  margin-top: 0.5rem;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-cell--revealing {
+    animation: none;
+  }
+}
+
 /* ======================================
    SINGLE ARTICLE
    ====================================== */
@@ -909,8 +973,16 @@ main:focus { outline: none; }
   .site-footer,
   .post-nav,
   .archive-link-container,
+  .front-archive-link,
+  .feed-status,
+  .feed-sentinel,
   .mood-chart-container {
     display: none !important;
+  }
+
+  /* When printing, render every story regardless of JS-driven hiding. */
+  .story-cell--hidden {
+    display: block !important;
   }
 
   .site-wrapper {

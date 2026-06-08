@@ -1,8 +1,8 @@
 {{ define "main" }}
 {{ $posts := where .Site.RegularPages "Section" "posts" }}
-{{ $latest := first 10 ($posts.ByDate.Reverse) }}
+{{ $ordered := $posts.ByDate.Reverse }}
 
-{{ with index $latest 0 }}
+{{ with index $ordered 0 }}
 <article class="lead-story">
   <a href="{{ .Permalink }}" class="lead-link">
     <div class="lead-meta">
@@ -16,11 +16,14 @@
 </article>
 {{ end }}
 
-{{ $rest := after 1 $latest }}
+{{/* Every post after the lead is server-rendered (Hugo-escaped). feed.js hides
+     all but the first batch on load and reveals more as the user scrolls.
+     With JS disabled, every cell is visible — the cell-hiding is JS's job. */}}
+{{ $rest := after 1 $ordered }}
 {{ if $rest }}
 <div class="front-rule"></div>
 
-<div class="stories-grid">
+<div class="stories-grid" id="stories-grid" data-batch-size="9" data-initial-batch="9">
   {{ range $rest }}
   <article class="story-cell">
     <a href="{{ .Permalink }}" class="story-link">
@@ -32,11 +35,18 @@
   </article>
   {{ end }}
 </div>
+
+{{/* Sentinel + status. Both are inert without JS and don't disturb the no-JS
+     experience (which simply shows every cell). */}}
+<div class="feed-status" id="feed-status" aria-live="polite" aria-atomic="true"></div>
+<div class="feed-sentinel" id="feed-sentinel" aria-hidden="true"></div>
 {{ end }}
 
-{{ if gt (len $posts) (len $latest) }}
-<div class="archive-link-container">
-  <a href="/archive/" class="archive-link">Full Archive →</a>
+{{/* Archive remains reachable for everyone — primarily for its mood chart.
+     Moved to a quieter footer-style position; no longer the "see more" path. */}}
+<div class="front-archive-link">
+  <a href="/archive/" class="archive-link">Browse the full archive →</a>
 </div>
-{{ end }}
+
+<script src="/js/feed.js" defer></script>
 {{ end }}
