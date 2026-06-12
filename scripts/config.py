@@ -20,7 +20,8 @@ if _local_config_path.exists():
 TIMEZONE = LOCAL_CONFIG.get("timezone", "America/Los_Angeles")
 
 # Model config — uses claude CLI (subscription), not direct API
-MODEL = "sonnet"
+# [1m] = 1M-token context window, needed to fit the 30-day news history
+MODEL = "sonnet[1m]"
 MODEL_DISPLAY = "Claude Sonnet 4.6"
 
 # News sources — RSS feeds that actually work and give usable content
@@ -28,7 +29,7 @@ MODEL_DISPLAY = "Claude Sonnet 4.6"
 RSS_FEEDS = {
     "politics": [
         "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en",
-        "https://feeds.reuters.com/Reuters/worldNews",
+        "https://www.theguardian.com/world/rss",
         "https://feeds.bbci.co.uk/news/world/rss.xml",
         "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     ],
@@ -39,7 +40,7 @@ RSS_FEEDS = {
     ],
     "energy": [
         "https://news.google.com/rss/search?q=energy+climate+when:1d&hl=en-US&gl=US&ceid=US:en",
-        "https://feeds.reuters.com/reuters/businessNews",
+        "https://www.theguardian.com/us/business/rss",
         "https://www.utilitydive.com/feeds/news/",
     ],
     "tech": [
@@ -48,7 +49,7 @@ RSS_FEEDS = {
         "https://www.theverge.com/rss/index.xml",
     ],
     "wildcard": [
-        "https://hnrss.org/frontpage?count=10",
+        "https://news.ycombinator.com/rss",
         "https://news.google.com/rss/headlines/section/topic/SCIENCE?hl=en-US&gl=US&ceid=US:en",
     ],
 }
@@ -58,6 +59,11 @@ ARTICLES_PER_CATEGORY = 5
 
 # How many previous entries to include for continuity
 MEMORY_ENTRIES = 5
+
+# How many past days of news headlines to include for continuity.
+# Must be <= the state-file retention window (cleanup_old_state_files
+# deletes news caches older than 30 days).
+NEWS_MEMORY_DAYS = 30
 
 # Topics to cover
 TOPICS = ["politics", "markets", "energy", "tech", "wildcard"]

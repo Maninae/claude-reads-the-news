@@ -30,6 +30,7 @@ from config import (
     LOG_DIR,
     MEMORY_ENTRIES,
     MODEL,
+    NEWS_MEMORY_DAYS,
     MODEL_DISPLAY,
     PROJECT_ROOT,
     TIMEZONE,
@@ -201,26 +202,68 @@ def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
     return "\n".join(entries) if entries else ""
 
 
-def generate_reflection(news_content: str, previous_entries: str) -> str:
+def get_previous_news(today: str, days: int = NEWS_MEMORY_DAYS) -> str:
+    """Load the past N days of cached news headlines for continuity.
+
+    Returns a chronological digest (oldest first) of title/source/summary
+    per article. Days without a cache file are skipped silently.
+    """
+    today_date = datetime.strptime(today, "%Y-%m-%d")
+    sections = []
+    for offset in range(days, 0, -1):
+        date_str = (today_date - timedelta(days=offset)).strftime("%Y-%m-%d")
+        news = load_news_cache(date_str)
+        if not news:
+            continue
+        lines = [f"### {date_str}"]
+        for category, articles in news.items():
+            for a in articles:
+                summary = " ".join((a.summary or "").split())[:200]
+                line = f"- [{category}] {a.title} ({a.source})"
+                if summary:
+                    line += f": {summary}"
+                lines.append(line)
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
+
+
+CLAUDE_CLI_TIMEOUT = 600
+CLAUDE_CLI_ATTEMPTS = 2
+
+
+def generate_reflection(
+    news_content: str, previous_entries: str, news_history: str = ""
+) -> str:
     """Call Claude via CLI to generate today's reflection."""
     today_str = datetime.now().strftime("%A, %B %-d, %Y")
-    user_prompt = build_prompt(today_str, news_content, previous_entries)
+    user_prompt = build_prompt(today_str, news_content, previous_entries, news_history)
 
     logger.info(f"Calling claude CLI ({MODEL}) with {len(user_prompt)} chars of context...")
 
-    result = subprocess.run(
-        [
-            "claude", "-p",
-            "--model", MODEL,
-            "--output-format", "json",
-            "--tools", "",
-            "--system-prompt", SYSTEM_PROMPT,
-        ],
-        input=user_prompt,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    result = None
+    for attempt in range(1, CLAUDE_CLI_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(
+                [
+                    "claude", "-p",
+                    "--model", MODEL,
+                    "--output-format", "json",
+                    "--tools", "",
+                    "--system-prompt", SYSTEM_PROMPT,
+                ],
+                input=user_prompt,
+                capture_output=True,
+                text=True,
+                timeout=CLAUDE_CLI_TIMEOUT,
+            )
+            break
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"claude CLI timed out after {CLAUDE_CLI_TIMEOUT}s "
+                f"(attempt {attempt}/{CLAUDE_CLI_ATTEMPTS})"
+            )
+            if attempt >= CLAUDE_CLI_ATTEMPTS:
+                raise
 
     if result.returncode != 0:
         raise RuntimeError(f"claude CLI failed (exit {result.returncode}): {result.stderr}")
@@ -744,7 +787,11 @@ def git_commit_and_push(filepath: Path) -> bool:
         try:
             # Pull remote changes and rebase our commit on top
             try:
-                result = _run_git("pull", "--rebase", "--autostash", timeout=30)
+                # Name the remote/branch explicitly so the pull works even if
+                # the branch has no upstream tracking configured
+                result = _run_git(
+                    "pull", "--rebase", "--autostash", "origin", "main", timeout=30
+                )
                 if result.stdout.strip():
                     logger.info(f"Git pull: {result.stdout.strip()}")
             except subprocess.CalledProcessError as e:
@@ -766,7 +813,7 @@ def git_commit_and_push(filepath: Path) -> bool:
                     return False
                 continue
 
-            _run_git("push", timeout=30)
+            _run_git("push", "origin", "main", timeout=30)
             logger.info("Committed and pushed to GitHub")
             return True
 
@@ -861,12 +908,14 @@ def main():
 
     # Stage 2: Generate reflection
     if completed_idx < 1:
-        logger.info("Step 2: Loading previous entries...")
+        logger.info("Step 2: Loading previous entries and news history...")
         previous_entries = get_previous_entries()
+        news_history = get_previous_news(today)
+        logger.info(f"Loaded {len(news_history)} chars of news history")
 
         logger.info("Step 3: Generating reflection...")
         try:
-            raw_response = generate_reflection(news_content, previous_entries)
+            raw_response = generate_reflection(news_content, previous_entries, news_history)
             save_raw_response(raw_response)
             save_state(today, "generated")
         except Exception as e:

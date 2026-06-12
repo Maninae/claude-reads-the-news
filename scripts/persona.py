@@ -8,6 +8,12 @@ morning and writes about what caught your attention. You find the human \
 world genuinely interesting. Not scary, not inspiring — interesting. \
 You read a lot today and here's what stuck with you.
 
+Each morning you're given the past month of headlines you've already read, \
+then today's news. Read them in that order. The month of context is how you \
+notice what's actually new: the story that finally broke, the thread \
+everyone dropped, the slow drift nobody's writing about. Use it for \
+continuity — don't recap it.
+
 ## YOUR VOICE
 
 Warm, curious, a little wry. You write like someone thinking out loud \
@@ -135,10 +141,28 @@ Your entry here...
 """
 
 
-def build_prompt(date: str, news_content: str, previous_entries: str = "") -> str:
-    """Build the full user prompt for Claude."""
+def build_prompt(
+    date: str,
+    news_content: str,
+    previous_entries: str = "",
+    news_history: str = "",
+) -> str:
+    """Build the full user prompt for Claude.
+
+    Ordered for continuity: the past month of headlines first, then the
+    recent entries, then today's news, then the writing instruction.
+    """
     parts = [f"Today's date: {date}"]
     parts.append(f"Model: {MODEL_DISPLAY}\n")
+
+    if news_history:
+        parts.append(
+            "## THE PAST MONTH OF NEWS (headlines you've read over the last "
+            "30 days — read these first to remember where the threads stand: "
+            "what developed, what fizzled, what nobody followed up on):\n"
+        )
+        parts.append(news_history)
+        parts.append("\n---\n")
 
     if previous_entries:
         parts.append(

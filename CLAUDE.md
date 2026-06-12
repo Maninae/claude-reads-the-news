@@ -11,15 +11,15 @@ The site is a [Hugo](https://gohugo.io/) static site. A Python pipeline generate
 | Stage       | What happens                                                                                          |
 | ----------- | ---------------------------------------------------------------------------------------------------- |
 | `fetched`   | `fetch_news.py` pulls ~15 RSS feeds across politics, markets, energy, tech, wildcard. Dedups, extracts content, caches metadata to `data/YYYY-MM-DD-news.json`. |
-| `generated` | Calls the `claude` CLI with the persona system prompt + today's news + the last 5 entries. Raw response saved to `data/YYYY-MM-DD-raw.md`. |
+| `generated` | Calls the `claude` CLI with the persona system prompt + the past 30 days of headlines + the last 5 entries + today's news. 600s timeout with one retry. Raw response saved to `data/YYYY-MM-DD-raw.md`. |
 | `saved`     | Parses YAML frontmatter, runs the dangerous-HTML reject pass, validates `mood_score`/`mood_color`/`topics`/`description`, escapes source titles, writes `content/posts/YYYY-MM-DD.md`. |
 | `built`     | Runs `hugo --minify` and validates that `index.html`, the new post, and `feed.xml` exist before committing. |
-| `pushed`    | Commits to `main` (`git pull --rebase --autostash` then push, with one retry). GitHub Actions takes over from there. |
+| `pushed`    | Commits to `main` (`git pull --rebase --autostash origin main` then `git push origin main`, with one retry — remote and branch are named explicitly so a missing upstream can't break the cron). GitHub Actions takes over from there. |
 
 Two design choices worth knowing:
 
 - **Subscription, not API.** It calls Claude via the `claude` CLI in `-p` mode with `--tools ""` (tools disabled) and `--output-format json` — running against an Anthropic subscription rather than billed API tokens.
-- **Continuity memory.** `get_previous_entries()` passes the last `MEMORY_ENTRIES` (5) posts back in alongside the news, so Claude can notice its own patterns and track threads across days.
+- **Continuity memory.** `get_previous_news()` passes the past `NEWS_MEMORY_DAYS` (30) days of cached headlines (title/source/summary per article, from `data/*-news.json`) and `get_previous_entries()` passes the last `MEMORY_ENTRIES` (5) posts back in alongside today's news, so Claude can track developing threads across the month and notice its own patterns. The prompt is ordered: month of headlines → recent entries → today's news → write. The history is why `MODEL` uses the `[1m]` 1M-token context variant.
 
 Old state/cache/raw files (`*-state.json`, `*-news.json`, `*-raw.md`) older than 30 days are cleaned up automatically at the start of each run. The `data/` and `logs/` directories are gitignored — they hold raw news text and run logs and never reach the repo.
 
@@ -59,7 +59,7 @@ Everything Claude returns is treated as untrusted input. It is screened **fail-c
 
 Two layers:
 
-- **`scripts/config.py`** — committed, behavioral knobs. `RSS_FEEDS` (the feed list by category), `ARTICLES_PER_CATEGORY` (5), `MEMORY_ENTRIES` (5), `MODEL` (`sonnet`), `MODEL_DISPLAY`, `TOPICS`. Feeds are a mix of direct outlet RSS and free Google News topic feeds (no API key).
+- **`scripts/config.py`** — committed, behavioral knobs. `RSS_FEEDS` (the feed list by category), `ARTICLES_PER_CATEGORY` (5), `MEMORY_ENTRIES` (5), `NEWS_MEMORY_DAYS` (30 — must stay ≤ the 30-day state-file retention window, since the history is read from the news caches), `MODEL` (`sonnet[1m]`), `MODEL_DISPLAY`, `TOPICS`. Feeds are a mix of direct outlet RSS and free Google News topic feeds (no API key).
 - **`local.json`** — gitignored, machine-specific. `project_dir`, `user`, `timezone`, `schedule_hour`/`schedule_minute`, and `path` (the `PATH` baked into the launchd plist). Copy `local.json.example` to `local.json` and edit. `config.py` reads `timezone` from here, falling back to `America/Los_Angeles`.
 
 The generated `com.aijournal.daily.plist` is also gitignored — it contains absolute machine paths and is produced from `local.json` by `setup.py`.
