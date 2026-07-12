@@ -5,15 +5,19 @@ shape encodes progress per profile plus the two site-wide stages:
 
     {
       "profiles": {"international": "generated", "tech": "saved", ...},
-      "built":   false,
-      "pushed":  false,
+      "built":   ["tech", "usa"],
+      "pushed":  ["tech", "usa"],
       "updated": "2026-07-12T07:00:00"
     }
 
 Per-profile stages advance through: fetched -> generated -> saved.
 Once every profile that will succeed has reached `saved`, the run runs
-the shared `built` and `pushed` stages once. A rerun skips any profile
-already at or past the requested stage.
+the shared `built` and `pushed` stages. A rerun skips any profile
+already at or past the requested stage. `built` and `pushed` hold the
+slug set each stage last covered (not booleans), so a rerun that lands
+a new profile after an earlier build/push runs those stages again over
+the larger set. Both stages are idempotent to rerun: Hugo rebuilds in
+place, and git skips the commit when nothing is staged.
 
 The old single-key `{"stage": ...}` shape used before the split ships is
 treated as a completed legacy day: `load_state` returns a sentinel so
@@ -80,10 +84,22 @@ def load_state(date_str: str) -> dict:
 
     return {
         "profiles": raw.get("profiles", {}),
-        "built": bool(raw.get("built", False)),
-        "pushed": bool(raw.get("pushed", False)),
+        "built": _coerce_slug_list(raw.get("built")),
+        "pushed": _coerce_slug_list(raw.get("pushed")),
         "updated": raw.get("updated"),
     }
+
+
+def _coerce_slug_list(value) -> list[str]:
+    """Coerce a state file's built/pushed value to a slug list.
+
+    Files written before the slug-list change stored booleans. True
+    coerces to [] (an unknown coverage set), which makes the stage
+    rerun; that is safe because build and push are idempotent.
+    """
+    if isinstance(value, list):
+        return [str(slug) for slug in value]
+    return []
 
 
 def save_state(date_str: str, state: dict) -> None:

@@ -45,9 +45,9 @@ def _expected_toml_block() -> str:
 def validate_config_matches_registry() -> None:
     """Fail loud if config.toml's reader_profiles differ from the registry.
 
-    Checks presence of the block, exact slug list, exact tab-label list,
-    and exact order. Any mismatch raises ProfileConfigMismatch with the
-    exact TOML block that would fix it.
+    Checks presence of the block and exact (slug, label, description)
+    triples in exact order. Any mismatch raises ProfileConfigMismatch
+    with the exact TOML block that would fix it.
     """
     config = _load_config_toml()
     params = config.get("params") or {}
@@ -63,10 +63,13 @@ def validate_config_matches_registry() -> None:
         (
             (entry.get("slug") or "").strip(),
             (entry.get("label") or "").strip(),
+            (entry.get("description") or "").strip(),
         )
         for entry in block
     ]
-    want = [(p.slug, p.tab_label) for p in READER_PROFILES.values()]
+    want = [
+        (p.slug, p.tab_label, p.description) for p in READER_PROFILES.values()
+    ]
 
     if got != want:
         raise ProfileConfigMismatch(

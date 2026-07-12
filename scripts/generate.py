@@ -57,19 +57,16 @@ from config import (
 from data_paths import (
     cleanup_old_state_files,
     load_news_cache,
-    news_cache_path,
     raw_response_path,
     save_news_cache,
 )
 from fetch_news import (
-    AllFeedsFailedError,
     Article,
     fetch_all_news,
     format_news_for_prompt,
 )
 from persona import build_prompt, load_system_prompt
 from pipeline_state import (
-    LEGACY_COMPLETE,
     PROFILE_STAGES,
     SITE_STAGES,
     is_legacy_complete,
@@ -78,7 +75,7 @@ from pipeline_state import (
     profile_reached,
     save_state,
 )
-from profiles import READER_PROFILES, ReaderProfile, all_profile_slugs, get_profile
+from profiles import READER_PROFILES, ReaderProfile, all_profile_slugs
 from toml_check import ProfileConfigMismatch, validate_config_matches_registry
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -774,7 +771,7 @@ def run_profile_pipeline(
             save_news_cache(today, slug, news)
             mark_profile_stage(state, slug, "fetched")
             save_state(today, state)
-        except (AllFeedsFailedError, Exception) as e:
+        except Exception as e:
             notify_failure(f"[{slug}] News fetch failed: {e}")
             return False
     else:
@@ -939,9 +936,7 @@ def main() -> int:
     # otherwise the day is a failure.
     if stop_idx < _stage_index("saved"):
         if not reached_target:
-            notify_failure(
-                f"No profiles reached '{stop_at_stage}' — the day did not ship"
-            )
+            notify_failure(f"No profiles reached '{stop_at_stage}'")
             return 1
         logger.info(
             f"Stopping at --until {stop_at_stage}. "
@@ -970,15 +965,19 @@ def main() -> int:
         if profile_reached(state, slug, "saved")
     ]
 
-    if not state.get("built"):
+    # built/pushed record the slug set they last covered, so a rerun that
+    # lands a NEW profile after an earlier build/push runs them again over
+    # the larger set instead of skipping on a stale boolean.
+    built_over = set(state.get("built") or [])
+    if built_over != set(all_shipped_today):
         logger.info(f"Step: building site over {all_shipped_today}...")
         if not build_site(today, all_shipped_today):
             notify_failure("Hugo build failed")
             return 1
-        state["built"] = True
+        state["built"] = all_shipped_today
         save_state(today, state)
     else:
-        logger.info("Build already done, skipping.")
+        logger.info("Build already covers every saved profile, skipping.")
 
     if stop_idx < _stage_index("pushed"):
         logger.info(
@@ -986,15 +985,18 @@ def main() -> int:
         )
         return 0
 
-    if not state.get("pushed"):
+    pushed_over = set(state.get("pushed") or [])
+    if pushed_over != set(all_shipped_today):
         logger.info(f"Step: committing and pushing {all_shipped_today}...")
         if not git_commit_and_push(all_shipped_today):
             notify_failure("Git push failed")
             return 1
-        state["pushed"] = True
+        state["pushed"] = all_shipped_today
         save_state(today, state)
     else:
-        logger.info(f"Entry for {today} already pushed. Nothing to do.")
+        logger.info(
+            f"Push already covers every saved profile for {today}. Nothing to do."
+        )
 
     logger.info("Daily generation complete!")
     return 0
