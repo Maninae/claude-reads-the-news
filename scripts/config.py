@@ -1,11 +1,16 @@
-"""Configuration for Claude's Daily Digest generation."""
+"""Configuration for Claude's Daily Digest generation.
+
+Cross-profile knobs live here. Per-profile feed lists, topics, and
+persona fragments live in scripts/profiles.py + prompts/profiles/
+(one module + one markdown file per desk).
+"""
 
 import json
 from pathlib import Path
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
-CONTENT_DIR = PROJECT_ROOT / "content" / "posts"
+CONTENT_DIR = PROJECT_ROOT / "content"
 DATA_DIR = PROJECT_ROOT / "data"
 LOG_DIR = PROJECT_ROOT / "logs"
 FEED_HEALTH_PATH = DATA_DIR / "feed-health.json"
@@ -24,46 +29,14 @@ TIMEZONE = LOCAL_CONFIG.get("timezone", "America/Los_Angeles")
 MODEL = "sonnet[1m]"
 MODEL_DISPLAY = "Claude Sonnet 4.6"
 
-# News sources — RSS feeds that actually work and give usable content
-# Mix of direct outlet RSS + Google News topic feeds (free, unlimited, no API key)
-RSS_FEEDS = {
-    "politics": [
-        "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en",
-        "https://www.theguardian.com/world/rss",
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
-        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    ],
-    "markets": [
-        "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en",
-        "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-        "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    ],
-    "energy": [
-        "https://news.google.com/rss/search?q=energy+climate+when:1d&hl=en-US&gl=US&ceid=US:en",
-        "https://www.theguardian.com/us/business/rss",
-        "https://www.utilitydive.com/feeds/news/",
-    ],
-    "tech": [
-        "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=en-US&gl=US&ceid=US:en",
-        "https://feeds.arstechnica.com/arstechnica/index",
-        "https://www.theverge.com/rss/index.xml",
-    ],
-    "wildcard": [
-        "https://news.ycombinator.com/rss",
-        "https://news.google.com/rss/headlines/section/topic/SCIENCE?hl=en-US&gl=US&ceid=US:en",
-    ],
-}
-
-# How many articles to fetch per category
+# How many articles to fetch per feed sub-category. Applied per profile,
+# so a 5-cap desk with two sub-categories still surfaces up to 10 rows.
 ARTICLES_PER_CATEGORY = 5
 
-# How many previous entries to include for continuity
+# How many previous entries to include for continuity (per profile).
 MEMORY_ENTRIES = 5
 
 # How many past days of news headlines to include for continuity.
 # Must be <= the state-file retention window (cleanup_old_state_files
 # deletes news caches older than 30 days).
 NEWS_MEMORY_DAYS = 30
-
-# Topics to cover
-TOPICS = ["politics", "markets", "energy", "tech", "wildcard"]

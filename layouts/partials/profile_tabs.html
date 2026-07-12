@@ -1,0 +1,33 @@
+{{/*
+  Reader-profile tab bar.
+
+  Renders the pinned tab strip from site.Params.reader_profiles.
+  The active tab (matching the current page's section) gets aria-current="page".
+
+  Behavior lives in /js/profile-tabs.js:
+    - Fits: static centered strip.
+    - Overflows: seamless marquee (clone once), pointer-drag scrubbing,
+      hover-pause, prefers-reduced-motion falls back to plain scroll.
+  With JS disabled it's a wrapping/scrollable row and remains fully usable.
+
+  The active-section match uses Hugo's .Section, which resolves to the
+  top-level section slug on both section pages and single posts.
+*/}}
+{{- $currentSection := .Section -}}
+{{- with .Site.Params.reader_profiles -}}
+<nav class="profile-tabs" aria-label="Sections" data-profile-tabs>
+  <div class="profile-tabs-viewport" data-profile-tabs-viewport>
+    <ul class="profile-tabs-track" data-profile-tabs-track>
+      {{- range . -}}
+      {{- $isActive := eq $currentSection .slug -}}
+      <li class="profile-tabs-item">
+        <a href="/{{ .slug }}/"
+           class="profile-tab{{ if $isActive }} profile-tab--active{{ end }}"
+           {{ if $isActive }}aria-current="page"{{ end }}
+           title="{{ .description }}">{{ .label }}</a>
+      </li>
+      {{- end -}}
+    </ul>
+  </div>
+</nav>
+{{- end -}}

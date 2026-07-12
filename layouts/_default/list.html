@@ -1,8 +1,35 @@
 {{ define "main" }}
-{{ $posts := where .Site.RegularPages "Section" "posts" }}
-{{ $ordered := $posts.ByDate.Reverse }}
+{{/*
+  Section list page. Renders the current section (any of the six profiles
+  or the legacy /posts/). Lead story + stories grid, batched via feed.js.
+*/}}
+{{- $section := .Section -}}
+{{- $posts := where .Site.RegularPages "Section" $section -}}
+{{- $ordered := $posts.ByDate.Reverse -}}
 
-{{ with index $ordered 0 }}
+{{/* Section header: label + description sourced from the profile registry
+     when the section matches. Legacy /posts/ falls back to a fixed line. */}}
+{{- $headerLabel := "" -}}
+{{- $headerDescription := "" -}}
+{{- range .Site.Params.reader_profiles -}}
+  {{- if eq .slug $section -}}
+    {{- $headerLabel = .label -}}
+    {{- $headerDescription = .description -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq $section "posts" -}}
+  {{- $headerLabel = "The Original Digest" -}}
+  {{- $headerDescription = "The original single daily digest, April to July 2026." -}}
+{{- end -}}
+
+{{- if $headerLabel }}
+<header class="section-header">
+  <h1 class="section-header-title">{{ $headerLabel }}</h1>
+  <p class="section-header-description">{{ $headerDescription }}</p>
+</header>
+{{- end }}
+
+{{- with index $ordered 0 }}
 <article class="lead-story">
   <a href="{{ .Permalink }}" class="lead-link">
     <div class="lead-meta">
@@ -14,17 +41,17 @@
   </a>
   <div class="lead-mood" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
 </article>
-{{ end }}
+{{- end }}
 
 {{/* Every post after the lead is server-rendered (Hugo-escaped). feed.js hides
      all but the first batch on load and reveals more as the user scrolls.
      With JS disabled, every cell is visible — the cell-hiding is JS's job. */}}
-{{ $rest := after 1 $ordered }}
-{{ if $rest }}
+{{- $rest := after 1 $ordered }}
+{{- if $rest }}
 <div class="front-rule"></div>
 
 <div class="stories-grid" id="stories-grid" data-batch-size="9" data-initial-batch="9">
-  {{ range $rest }}
+  {{- range $rest }}
   <article class="story-cell">
     <a href="{{ .Permalink }}" class="story-link">
       {{ with .Params.topics }}{{ range first 1 . }}<span class="section-label">{{ . }}</span>{{ end }}{{ end }}
@@ -33,17 +60,13 @@
       <time class="story-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Jan 2" | upper }}</time>
     </a>
   </article>
-  {{ end }}
+  {{- end }}
 </div>
 
-{{/* Sentinel + status. Both are inert without JS and don't disturb the no-JS
-     experience (which simply shows every cell). */}}
 <div class="feed-status" id="feed-status" aria-live="polite" aria-atomic="true"></div>
 <div class="feed-sentinel" id="feed-sentinel" aria-hidden="true"></div>
-{{ end }}
+{{- end }}
 
-{{/* Archive remains reachable for everyone — primarily for its mood chart.
-     Moved to a quieter footer-style position; no longer the "see more" path. */}}
 <div class="front-archive-link">
   <a href="/archive/" class="archive-link">Browse the full archive →</a>
 </div>

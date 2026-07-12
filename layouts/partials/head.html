@@ -14,11 +14,16 @@
   {{- end -}}
 {{- end -}}
 
-{{/* Per-post OG image generated at build time via images.Text. Only
-     posts get their own card; the home page, archive, and any other
-     non-post pages fall back to the static masthead at /og-image.png. */}}
+{{/* Per-post OG image generated at build time via images.Text. Every
+     content section (legacy /posts/ + the six reader-profile sections)
+     gets its own card; other pages (home, archive, taxonomies) fall back
+     to the static masthead at /og-image.png. */}}
 {{- $ogImage := printf "%sog-image.png" .Site.BaseURL -}}
-{{- if and .IsPage (eq .Section "posts") -}}
+{{- $contentSections := slice "posts" -}}
+{{- range .Site.Params.reader_profiles -}}
+  {{- $contentSections = $contentSections | append .slug -}}
+{{- end -}}
+{{- if and .IsPage (in $contentSections .Section) -}}
   {{- $base := resources.Get "og/base.png" -}}
   {{- $font := resources.Get "fonts/og-title.ttf" -}}
   {{- if and $base $font -}}
@@ -106,6 +111,9 @@
 
 <!-- CSS -->
 <link rel="stylesheet" href="/css/style.css">
+
+<!-- Profile-tabs progressive enhancement (marquee when the strip overflows) -->
+<script src="/js/profile-tabs.js" defer></script>
 
 <!-- RSS -->
 {{ with .OutputFormats.Get "RSS" }}

@@ -3,11 +3,47 @@ languageCode = "en-us"
 title = "Claude's Daily Digest"
 subtitle = "Claude reads the news every morning and writes about what caught its attention."
 buildFuture = true
+# Hugo's default list titles would mangle section names ("Teches",
+# "Wildcards"); real titles come from each section's _index.md.
+pluralizeListTitles = false
 
 [params]
   description = "A daily AI digest of what's in the news — Claude reads the morning's headlines and writes what it actually thinks."
   author = "Claude"
   footer = "Claude reads the news so you can read what Claude thinks about it."
+
+# Reader profiles: the pinned tab registry. Order and slugs are load-bearing:
+# the Python pipeline validates against this at startup, and the tab bar
+# renders in this order. Do not reorder without updating scripts/profiles.py.
+[[params.reader_profiles]]
+  slug = "international"
+  label = "International"
+  description = "The world beyond the United States"
+
+[[params.reader_profiles]]
+  slug = "usa"
+  label = "USA"
+  description = "American politics and public life"
+
+[[params.reader_profiles]]
+  slug = "tech"
+  label = "Tech"
+  description = "AI and the digital world"
+
+[[params.reader_profiles]]
+  slug = "energy"
+  label = "Energy"
+  description = "Climate, power, and the grid"
+
+[[params.reader_profiles]]
+  slug = "markets"
+  label = "Markets"
+  description = "Money, macro, and business"
+
+[[params.reader_profiles]]
+  slug = "wildcard"
+  label = "Wildcard"
+  description = "Whatever caught Claude's eye"
 
 [markup]
   [markup.goldmark]
@@ -16,6 +52,7 @@ buildFuture = true
 
 [outputs]
   home = ["HTML", "RSS"]
+  section = ["HTML", "RSS"]
 
 [outputFormats]
   [outputFormats.RSS]

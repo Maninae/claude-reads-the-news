@@ -22,7 +22,6 @@ from config import (
     ARTICLES_PER_CATEGORY,
     DATA_DIR,
     FEED_HEALTH_PATH,
-    RSS_FEEDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -443,14 +442,15 @@ def _save_feed_health(feed_stats: dict[str, dict]) -> None:
         logger.warning(f"Could not write feed health log: {e}")
 
 
-def check_feed_health() -> dict[str, list[dict]]:
-    """Check connectivity and parse status of all configured feeds.
+def check_feed_health(feeds: dict[str, list[str]]) -> dict[str, list[dict]]:
+    """Check connectivity and parse status of the given feed dict.
 
-    Returns a dict of category → list of {url, ok, entries, error} results.
-    Useful for monitoring which feeds are healthy.
+    Callers pass a per-profile feeds dict (sub-category name -> list of
+    URLs); returns the same shape with per-URL {url, ok, entries, error}
+    results. Useful for monitoring which feeds are healthy.
     """
     results: dict[str, list[dict]] = {}
-    for category, urls in RSS_FEEDS.items():
+    for category, urls in feeds.items():
         results[category] = []
         for url in urls:
             try:
@@ -470,15 +470,27 @@ def check_feed_health() -> dict[str, list[dict]]:
     return results
 
 
-def fetch_all_news() -> dict[str, list[Article]]:
-    """Fetch news from all configured RSS feeds, deduplicated.
+def fetch_all_news(
+    feeds: dict[str, list[str]],
+    profile_label: str = "",
+) -> dict[str, list[Article]]:
+    """Fetch news from one profile's feed dict, dedup, screen for injection.
 
-    Raises AllFeedsFailedError if every feed fails.
+    Callers pass a per-profile feed dict (sub-category name -> list of URLs)
+    and an optional label used in log lines to distinguish which desk we
+    are fetching for. Raises `AllFeedsFailedError` if every feed in the
+    dict fails; the caller catches per profile so one dead desk does not
+    kill the day.
+
+    The prompt-injection screen and full-text extraction run per profile
+    too, so a manipulation attempt in one desk's feed cannot bleed into
+    another desk's output.
     """
+    tag = f"[{profile_label}] " if profile_label else ""
     all_articles = []
     feed_stats: dict[str, dict] = {}  # url → {ok, count, error}
 
-    for category, urls in RSS_FEEDS.items():
+    for category, urls in feeds.items():
         category_count = 0
         for url in urls:
             articles, error = fetch_rss_feed(url, category)
@@ -489,47 +501,50 @@ def fetch_all_news() -> dict[str, list[Article]]:
                 "error": error,
             }
             if articles:
-                logger.info(f"Fetched {len(articles)} articles from {url}")
+                logger.info(f"{tag}Fetched {len(articles)} articles from {url}")
                 category_count += len(articles)
 
         if category_count == 0:
             logger.warning(
-                f"No articles fetched for category '{category}' — "
+                f"{tag}No articles fetched for category '{category}' — "
                 f"all {len(urls)} feeds failed or returned empty"
             )
 
-    # Persist feed health to disk
+    # Persist feed health to disk. The health file is keyed by URL so it
+    # merges safely when the same URL appears in more than one profile
+    # (Hacker News, for example, lives in both tech and wildcard) — the
+    # last write for a given URL simply wins.
     _save_feed_health(feed_stats)
 
-    # Evaluate overall health
+    # Evaluate overall health, scoped to this profile's feed dict.
     ok_count = sum(1 for s in feed_stats.values() if s["ok"])
     total_count = len(feed_stats)
     failed_urls = [url for url, s in feed_stats.items() if not s["ok"]]
 
     if ok_count == 0:
         logger.error(
-            f"ALL {total_count} feeds failed — aborting. "
+            f"{tag}ALL {total_count} feeds failed — aborting this profile. "
             f"Check network connectivity and feed URLs."
         )
         raise AllFeedsFailedError(
-            f"All {total_count} configured feeds failed to return articles"
+            f"{tag}All {total_count} configured feeds failed to return articles"
         )
 
     if total_count > 0 and (total_count - ok_count) / total_count > FEED_FAILURE_THRESHOLD:
         logger.error(
-            f"Feed health CRITICAL: only {ok_count}/{total_count} feeds returned articles. "
+            f"{tag}Feed health CRITICAL: only {ok_count}/{total_count} feeds returned articles. "
             f"Failed: {failed_urls}"
         )
     elif ok_count < total_count:
         logger.warning(
-            f"Feed health: {ok_count}/{total_count} feeds returned articles. "
+            f"{tag}Feed health: {ok_count}/{total_count} feeds returned articles. "
             f"Failed: {failed_urls}"
         )
 
-    # Deduplicate across all sources
+    # Deduplicate across all sources in this profile.
     unique = deduplicate(all_articles)
     logger.info(
-        f"Total: {len(all_articles)} articles, {len(unique)} after dedup"
+        f"{tag}Total: {len(all_articles)} articles, {len(unique)} after dedup"
     )
 
     # Extract full text for the top articles per category
@@ -542,7 +557,7 @@ def fetch_all_news() -> dict[str, list[Article]]:
         for i, article in enumerate(articles[:3]):
             by_category[category][i] = extract_full_text(article)
 
-    # Screen all articles for prompt injection in one batch
+    # Screen all articles for prompt injection in one batch, per profile.
     all_for_screening = [a for arts in by_category.values() for a in arts]
     clean_articles = screen_for_prompt_injection(all_for_screening)
     clean_fingerprints = {a.fingerprint for a in clean_articles}
@@ -574,6 +589,22 @@ def format_news_for_prompt(news: dict[str, list[Article]]) -> str:
 
 
 if __name__ == "__main__":
+    # Standalone sanity harness: iterate every profile and print its feed
+    # output. Handy for eyeballing what one desk is picking up.
+    import argparse
+
+    from profiles import READER_PROFILES, get_profile
+
     logging.basicConfig(level=logging.INFO)
-    news = fetch_all_news()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--profile",
+        default="tech",
+        choices=sorted(READER_PROFILES.keys()),
+        help="which reader profile to fetch",
+    )
+    args = parser.parse_args()
+
+    profile = get_profile(args.profile)
+    news = fetch_all_news(profile.feeds, profile_label=profile.slug)
     print(format_news_for_prompt(news))

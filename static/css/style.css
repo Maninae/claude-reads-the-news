@@ -184,6 +184,147 @@ main:focus { outline: none; }
 }
 
 /* ======================================
+   PROFILE TABS
+   ====================================== */
+
+/* The tab strip sits under the masthead on every page. Static row when it
+   fits; JS switches on marquee behavior when it overflows (see
+   /js/profile-tabs.js). With JS off it stays a wrapping/scrollable row
+   thanks to the CSS below, so nothing breaks. */
+
+.profile-tabs {
+  margin: 0 0 1.5rem;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.6rem;
+  /* Bleed a touch past the wrapper so the strip's edges align with
+     the masthead rules on narrow screens without introducing overflow. */
+}
+
+.profile-tabs-viewport {
+  overflow: hidden;
+  position: relative;
+}
+
+/* No-JS fallback: allow horizontal scroll if the strip overflows.
+   JS switches to overflow:hidden when it takes over (marquee mode)
+   or when it wants a scrollable strip under reduced-motion. */
+.profile-tabs-viewport:not(.profile-tabs-viewport--marquee):not(.profile-tabs-viewport--scroll) {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.profile-tabs-viewport:not(.profile-tabs-viewport--marquee):not(.profile-tabs-viewport--scroll)::-webkit-scrollbar {
+  display: none;
+}
+
+/* Reduced-motion mode: JS marks the viewport as scrollable and leaves the
+   track static; user pans by touch/wheel. */
+.profile-tabs-viewport--scroll {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.profile-tabs-viewport--scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.profile-tabs-track {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  /* Default: center the strip within the viewport when it fits. */
+  justify-content: center;
+  width: 100%;
+}
+
+/* Marquee mode: the track and its clone sit side by side and JS animates
+   the outer container via transform. Cancel the fits-nicely centering and
+   let both tracks be their natural widths. */
+.profile-tabs-viewport--marquee .profile-tabs-track {
+  width: auto;
+  justify-content: flex-start;
+}
+
+.profile-tabs-viewport--marquee {
+  /* Marquee mode uses transform on the track; hide the block-level
+     overflow so cloned copies flow inline past the viewport edges. */
+  white-space: nowrap;
+  cursor: grab;
+}
+
+.profile-tabs-viewport--marquee:active {
+  cursor: grabbing;
+}
+
+.profile-tabs-viewport--marquee .profile-tabs-track {
+  display: inline-flex;
+  transition: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.profile-tabs-item {
+  margin: 0;
+}
+
+.profile-tab {
+  display: inline-block;
+  padding: 0.5rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 400;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.profile-tab:hover {
+  color: var(--text);
+}
+
+.profile-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.profile-tab--active:hover {
+  color: var(--accent);
+}
+
+/* ======================================
+   SECTION HEADER (list pages)
+   ====================================== */
+
+.section-header {
+  padding: 0.25rem 0 1.2rem;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 0.5rem;
+}
+
+.section-header-title {
+  font-family: var(--font-display);
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.005em;
+  margin-bottom: 0.35rem;
+  line-height: 1.1;
+}
+
+.section-header-description {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+}
+
+/* ======================================
    SECTION LABELS
    ====================================== */
 
@@ -741,6 +882,15 @@ main:focus { outline: none; }
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+  align-items: center;
+}
+
+/* The per-row section chip identifies which tab/section the entry belongs
+   to. Kept muted so it doesn't compete with the topic labels. */
+.archive-section-chip {
+  color: var(--text-dim);
+  border: 1px solid var(--rule);
+  padding: 0.15rem 0.4rem;
 }
 
 .archive-mood {
@@ -976,6 +1126,7 @@ main:focus { outline: none; }
   .front-archive-link,
   .feed-status,
   .feed-sentinel,
+  .profile-tabs,
   .mood-chart-container {
     display: none !important;
   }
