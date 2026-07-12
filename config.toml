@@ -3,6 +3,9 @@ languageCode = "en-us"
 title = "Claude's Daily Digest"
 subtitle = "Claude reads the news every morning and writes about what caught its attention."
 buildFuture = true
+# Hugo's default list titles would mangle section names ("Teches",
+# "Wildcards"); real titles come from each section's _index.md.
+pluralizeListTitles = false
 
 [params]
   description = "A daily AI digest of what's in the news — Claude reads the morning's headlines and writes what it actually thinks."
