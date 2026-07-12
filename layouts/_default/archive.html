@@ -2,11 +2,25 @@
 <div class="archive-page">
   <h1 class="archive-title">Archive</h1>
 
-  {{ $posts := where .Site.RegularPages "Section" "posts" }}
-  {{ $hasMoodData := false }}
-  {{ range $posts }}
-    {{ if .Params.mood_score }}{{ $hasMoodData = true }}{{ end }}
-  {{ end }}
+  {{/* All entries across every content section: legacy /posts/ plus the six
+       reader-profile sections. Chronological, newest first. */}}
+  {{- $sections := slice "posts" -}}
+  {{- range .Site.Params.reader_profiles -}}
+    {{- $sections = $sections | append .slug -}}
+  {{- end -}}
+  {{- $posts := where .Site.RegularPages "Section" "in" $sections -}}
+
+  {{/* Section slug -> label map for the row chip. Legacy /posts/ is labeled
+       "Digest" so it doesn't visually blend with the tab set. */}}
+  {{- $sectionLabel := dict "posts" "Digest" -}}
+  {{- range .Site.Params.reader_profiles -}}
+    {{- $sectionLabel = merge $sectionLabel (dict .slug .label) -}}
+  {{- end -}}
+
+  {{- $hasMoodData := false -}}
+  {{- range $posts -}}
+    {{- if .Params.mood_score }}{{ $hasMoodData = true }}{{ end -}}
+  {{- end }}
 
   {{ if $hasMoodData }}
   <div class="mood-chart-container">
@@ -21,13 +35,14 @@
       <a href="{{ .Permalink }}" class="archive-entry-link">
         <time class="archive-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Jan 2" | upper }}</time>
         <h2 class="archive-headline">{{ .Title }}</h2>
-        {{ with .Params.topics }}
         <div class="archive-topics">
+          <span class="section-label archive-section-chip">{{ index $sectionLabel .Section }}</span>
+          {{ with .Params.topics }}
           {{ range . }}
           <span class="section-label">{{ . }}</span>
           {{ end }}
+          {{ end }}
         </div>
-        {{ end }}
       </a>
       <div class="archive-mood" style="background-color: {{ with .Params.mood_color }}{{ . }}{{ else }}var(--accent){{ end }};"></div>
     </article>

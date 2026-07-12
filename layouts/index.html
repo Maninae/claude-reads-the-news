@@ -1,0 +1,98 @@
+{{ define "main" }}
+{{/*
+  Homepage: "today across all tabs" overview.
+
+  Registry-order card grid of the latest entry per profile (profiles with
+  zero entries are simply skipped), followed by an interleaved "Earlier"
+  stream of every profile entry, newest first (excluding the cards above).
+
+  Legacy content/posts/ entries are NOT shown here. They stay reachable
+  from the archive.
+*/}}
+
+{{- $profiles := .Site.Params.reader_profiles -}}
+
+{{/* Latest entry per profile, in registry order, skipping empty profiles.
+     $latestIDs is the RelPermalink set we exclude from the "Earlier" stream. */}}
+{{- $latestPerProfile := slice -}}
+{{- $latestIDs := slice -}}
+{{- range $profiles -}}
+  {{- $slug := .slug -}}
+  {{- $label := .label -}}
+  {{- $sectionPages := where $.Site.RegularPages "Section" $slug -}}
+  {{- $ordered := $sectionPages.ByDate.Reverse -}}
+  {{- with index $ordered 0 -}}
+    {{- $latestPerProfile = $latestPerProfile | append (dict "page" . "profile" $slug "label" $label) -}}
+    {{- $latestIDs = $latestIDs | append .RelPermalink -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Today-strip: one card per profile that has any entries. */}}
+{{- if $latestPerProfile }}
+<section class="today-overview" aria-label="Today across all tabs">
+  <div class="stories-grid">
+    {{- range $latestPerProfile }}
+    {{- $p := .page }}
+    <article class="story-cell">
+      <a href="{{ $p.Permalink }}" class="story-link">
+        <span class="section-label">{{ .label }}</span>
+        <h3 class="story-headline">{{ $p.Title }}</h3>
+        <p class="story-excerpt">{{ with $p.Params.description }}{{ . }}{{ else }}{{ $p.Plain | transform.HTMLUnescape | truncate 140 }}{{ end }}</p>
+        <time class="story-date" datetime="{{ $p.Date.Format "2006-01-02" }}">{{ $p.Date.Format "Jan 2" | upper }}</time>
+      </a>
+    </article>
+    {{- end }}
+  </div>
+</section>
+{{- end }}
+
+{{/* "Earlier" stream: every profile entry across the six sections, newest
+     first, minus the cards above. Reuses the same server-rendered grid
+     shape so feed.js batching works unchanged.
+
+     Section-label chip (not the entry's topic) so every cell on the homepage
+     announces which desk it came from, consistent with the today-cards and
+     the archive rows. Section pages themselves keep the topic chip since
+     the desk is already the page context. */}}
+{{- $profileSlugs := slice -}}
+{{- $slugToLabel := dict -}}
+{{- range $profiles -}}
+  {{- $profileSlugs = $profileSlugs | append .slug -}}
+  {{- $slugToLabel = merge $slugToLabel (dict .slug .label) -}}
+{{- end -}}
+
+{{- $allProfileEntries := where .Site.RegularPages "Section" "in" $profileSlugs -}}
+{{- $allOrdered := $allProfileEntries.ByDate.Reverse -}}
+{{- $earlier := slice -}}
+{{- range $allOrdered -}}
+  {{- if not (in $latestIDs .RelPermalink) -}}
+    {{- $earlier = $earlier | append . -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $earlier }}
+<div class="front-rule"></div>
+
+<div class="stories-grid" id="stories-grid" data-batch-size="9" data-initial-batch="9">
+  {{- range $earlier }}
+  <article class="story-cell">
+    <a href="{{ .Permalink }}" class="story-link">
+      <span class="section-label">{{ index $slugToLabel .Section }}</span>
+      <h3 class="story-headline">{{ .Title }}</h3>
+      <p class="story-excerpt">{{ .Plain | transform.HTMLUnescape | truncate 140 }}</p>
+      <time class="story-date" datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "Jan 2" | upper }}</time>
+    </a>
+  </article>
+  {{- end }}
+</div>
+
+<div class="feed-status" id="feed-status" aria-live="polite" aria-atomic="true"></div>
+<div class="feed-sentinel" id="feed-sentinel" aria-hidden="true"></div>
+{{- end }}
+
+<div class="front-archive-link">
+  <a href="/archive/" class="archive-link">Browse the full archive →</a>
+</div>
+
+<script src="/js/feed.js" defer></script>
+{{ end }}
