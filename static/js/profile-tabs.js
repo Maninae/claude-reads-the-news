@@ -10,8 +10,13 @@
 //   - Clone the track once so the loop is seamless. Clones are aria-hidden
 //     and tabindex="-1" so screen readers and keyboard Tab skip them.
 //   - Continuous auto-scroll (~25 px/s), paused on hover and while pressed.
-//   - Pointer drag scrubs the position via Pointer Events + setPointerCapture
-//     (one code path for mouse and finger).
+//   - Pointer drag scrubs the position via Pointer Events (one code path
+//     for mouse and finger). Move/up listen on document during the drag so
+//     a gesture that leaves the strip still updates state; we do NOT use
+//     setPointerCapture because it retargets the derived click event to the
+//     viewport and prevents the tab anchor from navigating on a clean tap.
+//   - Trailing click is suppressed only when the gesture travelled more
+//     than DRAG_CLICK_SUPPRESS_PX, so a scrub can't accidentally navigate.
 //   - Auto-scroll resumes ~3s after last interaction.
 //   - prefers-reduced-motion => no auto-scroll, plain overflow-x scroll strip.
 //   - Focused tab links scroll into view.
@@ -20,6 +25,10 @@
 (function () {
   var AUTO_SCROLL_PX_PER_SEC = 25;
   var RESUME_DELAY_MS = 3000;
+  // A gesture that travels more than this many CSS px from pointerdown is a
+  // scrub, not a tap; the trailing click is suppressed so the user doesn't
+  // accidentally navigate to whichever tab their finger lifted over.
+  var DRAG_CLICK_SUPPRESS_PX = 6;
 
   function init() {
     var nav = document.querySelector('[data-profile-tabs]');
@@ -48,8 +57,12 @@
       pointerDown: false,
       dragStartX: 0,
       dragStartOffset: 0,
-      resumeTimer: 0,
-      capturedPointerId: null
+      // Cumulative horizontal distance from pointerdown (absolute). Reset
+      // per gesture; the trailing click is suppressed once this crosses
+      // DRAG_CLICK_SUPPRESS_PX so a scrub doesn't fire a tab navigation.
+      dragDistanceX: 0,
+      suppressNextClick: false,
+      resumeTimer: 0
     };
 
     function clearResumeTimer() {
@@ -193,31 +206,54 @@
       state.paused = true;
       state.dragStartX = event.clientX;
       state.dragStartOffset = state.offset;
+      state.dragDistanceX = 0;
+      // A fresh gesture: any suppression from the previous one is done.
+      state.suppressNextClick = false;
       clearResumeTimer();
-      try {
-        viewport.setPointerCapture(event.pointerId);
-        state.capturedPointerId = event.pointerId;
-      } catch (e) {
-        state.capturedPointerId = null;
-      }
+      // Track move/up on the document so a drag that leaves the viewport
+      // still updates state. We deliberately do NOT setPointerCapture on
+      // the viewport: capture retargets the derived click to the viewport
+      // instead of the anchor under the finger, which breaks tab navigation.
+      document.addEventListener('pointermove', onDocPointerMove);
+      document.addEventListener('pointerup', onDocPointerUp);
+      document.addEventListener('pointercancel', onDocPointerUp);
     }
 
-    function onPointerMove(event) {
+    function onDocPointerMove(event) {
       if (!state.pointerDown) return;
       var delta = event.clientX - state.dragStartX;
+      state.dragDistanceX = Math.abs(delta);
+      if (state.dragDistanceX > DRAG_CLICK_SUPPRESS_PX) {
+        // Latch on once crossed. Even if the user dwells back near the
+        // origin before release, they still travelled — treat it as scrub.
+        state.suppressNextClick = true;
+      }
       state.offset = state.dragStartOffset + delta;
       // The rAF loop already handles wrapping; if paused, nudge a frame so
       // the transform paints while the user drags.
       track.style.transform = 'translateX(' + state.offset + 'px)';
     }
 
+    function onDocPointerUp(event) {
+      endDrag(event);
+    }
+
+    function onClickCapture(event) {
+      // Runs in the capture phase so we intercept the click BEFORE the <a>
+      // handles it. Only a scrub-classified gesture suppresses; a clean tap
+      // (distance <= threshold) navigates as normal.
+      if (!state.suppressNextClick) return;
+      state.suppressNextClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
     function endDrag(event) {
       if (!state.pointerDown) return;
       state.pointerDown = false;
-      if (state.capturedPointerId !== null) {
-        try { viewport.releasePointerCapture(state.capturedPointerId); } catch (e) { /* ignore */ }
-        state.capturedPointerId = null;
-      }
+      document.removeEventListener('pointermove', onDocPointerMove);
+      document.removeEventListener('pointerup', onDocPointerUp);
+      document.removeEventListener('pointercancel', onDocPointerUp);
       // If the pointer is still hovering the strip, stay paused; otherwise
       // schedule the auto-resume.
       var stillHovering = event && event.type !== 'pointercancel' &&
@@ -241,9 +277,13 @@
     viewport.addEventListener('pointerenter', onPointerEnter);
     viewport.addEventListener('pointerleave', onPointerLeave);
     viewport.addEventListener('pointerdown', onPointerDown);
-    viewport.addEventListener('pointermove', onPointerMove);
-    viewport.addEventListener('pointerup', endDrag);
-    viewport.addEventListener('pointercancel', endDrag);
+    // pointermove/pointerup are attached to document during a drag so a
+    // pointer that leaves the viewport still updates state (and so we don't
+    // pull setPointerCapture, which would retarget the derived click away
+    // from the actual anchor and break tab navigation).
+    // Capture phase so we run BEFORE the <a>'s default click. Otherwise the
+    // link would already have navigated by the time our handler ran.
+    viewport.addEventListener('click', onClickCapture, true);
     nav.addEventListener('focusin', onFocusIn);
 
     // Debounced resize: rebuild the marquee if the viewport width crosses
