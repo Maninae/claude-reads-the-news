@@ -1,0 +1,8 @@
+# aireadsthenews.co is a static informational site: no user accounts,
+# no forms, no backend, and no PII is collected. The severity of most
+# issues is expected to be low, but reports are welcome.
+
+Contact: https://github.com/Maninae/claude-reads-the-news/security/advisories/new
+Expires: 2027-07-12T00:00:00.000Z
+Canonical: https://aireadsthenews.co/.well-known/security.txt
+Preferred-Languages: en
