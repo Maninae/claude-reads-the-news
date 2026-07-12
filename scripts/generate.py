@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
-"""
-Daily generation script for Claude's Daily Digest.
-Fetches news, generates a reflection via Claude CLI, publishes to the site.
+"""Daily generation pipeline for Claude's Daily Digest.
+
+Runs once per day under launchd. For each reader profile, in the
+canonical tab order, fetches its feeds, generates an entry with its own
+persona and continuity memory, and saves it to `content/<slug>/`. Then
+runs Hugo once and commits every profile that made it that day.
+
+State is tracked per profile in `data/YYYY-MM-DD-state.json`:
+
+    {"profiles": {"tech": "saved", ...}, "built": false, "pushed": false, ...}
+
+Re-running resumes any profile from its last completed stage. A profile
+that fails at any stage is skipped and the run keeps going; the day
+ships with whoever succeeded. The run exits non-zero only if zero
+profiles reached `saved`.
+
+CLI:
+
+    --profiles slug1,slug2   restrict to a subset of profiles (default: all)
+    --until STAGE            stop after STAGE
+                             (fetched | generated | saved | built | pushed)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import logging.handlers
-import os
 import re
 import subprocess
 import sys
@@ -20,7 +38,8 @@ from zoneinfo import ZoneInfo
 
 import frontmatter as fm_parser
 
-# Add scripts dir to path for imports
+# Add scripts dir to path so flat imports work whether we run this as
+# `python3 scripts/generate.py` or via run.sh.
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
@@ -35,9 +54,33 @@ from config import (
     PROJECT_ROOT,
     TIMEZONE,
 )
-from fetch_news import Article
-from fetch_news import fetch_all_news, format_news_for_prompt
-from persona import SYSTEM_PROMPT, build_prompt
+from data_paths import (
+    cleanup_old_state_files,
+    load_news_cache,
+    news_cache_path,
+    raw_response_path,
+    save_news_cache,
+)
+from fetch_news import (
+    AllFeedsFailedError,
+    Article,
+    fetch_all_news,
+    format_news_for_prompt,
+)
+from persona import build_prompt, load_system_prompt
+from pipeline_state import (
+    LEGACY_COMPLETE,
+    PROFILE_STAGES,
+    SITE_STAGES,
+    is_legacy_complete,
+    load_state,
+    mark_profile_stage,
+    profile_reached,
+    save_state,
+)
+from profiles import READER_PROFILES, ReaderProfile, all_profile_slugs, get_profile
+from toml_check import ProfileConfigMismatch, validate_config_matches_registry
+
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_RETENTION_DAYS = 30
 
@@ -56,109 +99,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-PIPELINE_STAGES = ["fetched", "generated", "saved", "built", "pushed"]
-
-
-def _state_path(date_str: str) -> Path:
-    """Return the path to today's pipeline state file."""
-    return DATA_DIR / f"{date_str}-state.json"
-
-
-def load_state(date_str: str) -> dict:
-    """Load pipeline state for a given date. Returns empty dict if none."""
-    path = _state_path(date_str)
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def save_state(date_str: str, stage: str, **extra) -> None:
-    """Mark a pipeline stage as complete, preserving earlier state."""
-    state = load_state(date_str)
-    state["stage"] = stage
-    state["updated"] = datetime.now().isoformat()
-    state.update(extra)
-    try:
-        _state_path(date_str).write_text(json.dumps(state, indent=2) + "\n")
-    except OSError as e:
-        logger.warning(f"Could not write state file: {e}")
-
-
-def _news_cache_path(date_str: str) -> Path:
-    """Path for cached news article metadata."""
-    return DATA_DIR / f"{date_str}-news.json"
-
-
-def save_news_cache(date_str: str, news: dict[str, list[Article]]) -> None:
-    """Persist fetched article metadata so resume doesn't need to re-fetch."""
-    cache = {}
-    for category, articles in news.items():
-        cache[category] = [
-            {
-                "title": a.title,
-                "summary": a.summary,
-                "url": a.url,
-                "source": a.source,
-                "category": a.category,
-                "full_text": a.full_text,
-            }
-            for a in articles
-        ]
-    try:
-        _news_cache_path(date_str).write_text(json.dumps(cache, indent=2) + "\n")
-    except OSError as e:
-        logger.warning(f"Could not write news cache: {e}")
-
-
-def load_news_cache(date_str: str) -> dict[str, list[Article]] | None:
-    """Load cached news articles from disk. Returns None if unavailable."""
-    path = _news_cache_path(date_str)
-    if not path.exists():
-        return None
-    try:
-        cache = json.loads(path.read_text())
-        news: dict[str, list[Article]] = {}
-        for category, articles in cache.items():
-            news[category] = [
-                Article(
-                    title=a["title"],
-                    summary=a["summary"],
-                    url=a["url"],
-                    source=a["source"],
-                    category=a["category"],
-                    full_text=a.get("full_text", ""),
-                )
-                for a in articles
-            ]
-        return news
-    except (json.JSONDecodeError, KeyError, OSError) as e:
-        logger.warning(f"Could not load news cache: {e}")
-        return None
-
-
-def cleanup_old_state_files(keep_days: int = 30) -> None:
-    """Remove state/cache files older than keep_days."""
-    if not DATA_DIR.exists():
-        return
-    cutoff = datetime.now() - timedelta(days=keep_days)
-    for pattern in ("*-state.json", "*-news.json", "*-raw.md"):
-        for path in DATA_DIR.glob(pattern):
-            try:
-                # Extract date from filename (YYYY-MM-DD-suffix)
-                date_str = path.stem.rsplit("-", 1)[0]
-                # For -raw and -news, stem is like 2026-04-09-raw
-                # For -state, stem is like 2026-04-09-state
-                # Extract the YYYY-MM-DD part
-                date_part = "-".join(date_str.split("-")[:3])
-                file_date = datetime.strptime(date_part, "%Y-%m-%d")
-                if file_date < cutoff:
-                    path.unlink()
-                    logger.info(f"Cleaned up old file: {path.name}")
-            except (ValueError, IndexError):
-                continue
+ALL_STAGES: tuple[str, ...] = PROFILE_STAGES + SITE_STAGES
 
 
 def ensure_dirs():
@@ -169,12 +110,20 @@ def ensure_dirs():
     cleanup_old_state_files()
 
 
-def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
-    """Load the last N entries for continuity context."""
-    if not CONTENT_DIR.exists():
+def profile_content_dir(slug: str) -> Path:
+    """Return `content/<slug>/`, creating it if needed."""
+    path = CONTENT_DIR / slug
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_previous_entries(slug: str, n: int = MEMORY_ENTRIES) -> str:
+    """Load the last N entries from a profile's section for continuity."""
+    section = CONTENT_DIR / slug
+    if not section.exists():
         return ""
 
-    posts = sorted(CONTENT_DIR.glob("*.md"), reverse=True)[:n]
+    posts = sorted(section.glob("*.md"), reverse=True)[:n]
     entries = []
     for post in reversed(posts):  # Chronological order
         content = post.read_text()
@@ -202,17 +151,18 @@ def get_previous_entries(n: int = MEMORY_ENTRIES) -> str:
     return "\n".join(entries) if entries else ""
 
 
-def get_previous_news(today: str, days: int = NEWS_MEMORY_DAYS) -> str:
-    """Load the past N days of cached news headlines for continuity.
+def get_previous_news(slug: str, today: str, days: int = NEWS_MEMORY_DAYS) -> str:
+    """Load the past N days of cached headlines for one profile.
 
-    Returns a chronological digest (oldest first) of title/source/summary
-    per article. Days without a cache file are skipped silently.
+    Days without a cache file for this profile are skipped silently, so
+    the first few days on a new profile still work: history is simply
+    empty until the pipeline has run for enough mornings to fill it.
     """
     today_date = datetime.strptime(today, "%Y-%m-%d")
     sections = []
     for offset in range(days, 0, -1):
         date_str = (today_date - timedelta(days=offset)).strftime("%Y-%m-%d")
-        news = load_news_cache(date_str)
+        news = load_news_cache(date_str, slug)
         if not news:
             continue
         lines = [f"### {date_str}"]
@@ -232,13 +182,20 @@ CLAUDE_CLI_ATTEMPTS = 2
 
 
 def generate_reflection(
-    news_content: str, previous_entries: str, news_history: str = ""
+    profile: ReaderProfile,
+    news_content: str,
+    previous_entries: str,
+    news_history: str = "",
 ) -> str:
-    """Call Claude via CLI to generate today's reflection."""
+    """Call Claude via CLI to generate today's reflection for one profile."""
     today_str = datetime.now().strftime("%A, %B %-d, %Y")
+    system_prompt = load_system_prompt(profile)
     user_prompt = build_prompt(today_str, news_content, previous_entries, news_history)
 
-    logger.info(f"Calling claude CLI ({MODEL}) with {len(user_prompt)} chars of context...")
+    logger.info(
+        f"[{profile.slug}] Calling claude CLI ({MODEL}) with "
+        f"{len(user_prompt)} chars of context..."
+    )
 
     result = None
     for attempt in range(1, CLAUDE_CLI_ATTEMPTS + 1):
@@ -249,7 +206,7 @@ def generate_reflection(
                     "--model", MODEL,
                     "--output-format", "json",
                     "--tools", "",
-                    "--system-prompt", SYSTEM_PROMPT,
+                    "--system-prompt", system_prompt,
                 ],
                 input=user_prompt,
                 capture_output=True,
@@ -259,21 +216,25 @@ def generate_reflection(
             break
         except subprocess.TimeoutExpired:
             logger.warning(
-                f"claude CLI timed out after {CLAUDE_CLI_TIMEOUT}s "
-                f"(attempt {attempt}/{CLAUDE_CLI_ATTEMPTS})"
+                f"[{profile.slug}] claude CLI timed out after "
+                f"{CLAUDE_CLI_TIMEOUT}s (attempt {attempt}/{CLAUDE_CLI_ATTEMPTS})"
             )
             if attempt >= CLAUDE_CLI_ATTEMPTS:
                 raise
 
     if result.returncode != 0:
-        raise RuntimeError(f"claude CLI failed (exit {result.returncode}): {result.stderr}")
+        raise RuntimeError(
+            f"claude CLI failed (exit {result.returncode}): {result.stderr}"
+        )
 
     response = json.loads(result.stdout)
     if response.get("is_error"):
-        raise RuntimeError(f"claude CLI error: {response.get('result', 'unknown')}")
+        raise RuntimeError(
+            f"claude CLI error: {response.get('result', 'unknown')}"
+        )
 
     response_text = response["result"]
-    logger.info(f"Generated {len(response_text)} chars")
+    logger.info(f"[{profile.slug}] Generated {len(response_text)} chars")
     return response_text
 
 
@@ -305,10 +266,7 @@ _DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # "I read JavaScript: The Good Parts" or "the javascript: URI scheme
     # was deprecated", which would DoS the daily pipeline the first time
     # a news headline contains the word. These four patterns cover the
-    # real attack vectors without touching prose:
-    #
-    # 1) Markdown inline link targets: [text](scheme:...) and the GFM
-    #    angle-wrapped variant [text](<scheme:...>)
+    # real attack vectors without touching prose.
     (
         "dangerous-scheme markdown link",
         re.compile(
@@ -316,8 +274,6 @@ _DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
-    # 2) Markdown reference definitions: [ref]: scheme:...  at line start.
-    #    MULTILINE so the ^ matches after any newline in the raw text.
     (
         "dangerous-scheme reference link",
         re.compile(
@@ -325,8 +281,6 @@ _DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
-    # 3) HTML attributes (href/src/action/formaction). Defence in depth
-    #    behind the tag patterns and Hugo's unsafe=false escaping.
     (
         "dangerous-scheme HTML attribute",
         re.compile(
@@ -334,7 +288,6 @@ _DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
-    # 4) Markdown autolinks: <scheme:...>
     (
         "dangerous-scheme autolink",
         re.compile(
@@ -348,10 +301,10 @@ _DANGEROUS_HTML_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def _reject_dangerous_html(text: str) -> None:
     """Raise ValueError if the text contains any disallowed pattern.
 
-    Fails closed: any match aborts the pipeline rather than trying to
-    sanitize-and-continue. The raw LLM response has already been written
-    to data/YYYY-MM-DD-raw.md before this is called, so the rejected
-    content remains available for inspection and replay.
+    Fails closed: any match aborts the day's run for that profile rather
+    than trying to sanitize-and-continue. The raw LLM response has already
+    been written to data/YYYY-MM-DD__<slug>-raw.md before this is called,
+    so the rejected content remains available for inspection and replay.
     """
     for label, pattern in _DANGEROUS_HTML_PATTERNS:
         match = pattern.search(text)
@@ -362,16 +315,16 @@ def _reject_dangerous_html(text: str) -> None:
             )
 
 
-def parse_reflection(raw: str) -> tuple[dict, str]:
+def parse_reflection(
+    raw: str, profile: ReaderProfile
+) -> tuple[dict, str]:
     """Parse the frontmatter and body from Claude's response.
 
     The full raw text (frontmatter + body) is run through
-    ``_reject_dangerous_html`` before any parsing so that injection
+    `_reject_dangerous_html` before any parsing so that injection
     attempts in title/mood_color/topics are caught alongside body-level
     attacks. Hugo's goldmark renderer (unsafe=false) then escapes any
-    stray HTML at render time — we do not run a second Python-level
-    sanitizer here because html5-based sanitizers mangle legitimate
-    prose like "the <think> tag" or "use <Component>".
+    stray HTML at render time.
     """
     text = raw.strip()
     # Handle case where Claude wraps in ```markdown blocks
@@ -391,7 +344,7 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
             "title": f"Entry for {today.strftime('%B %-d, %Y')}",
             "mood_score": _DEFAULT_MOOD_SCORE,
             "mood_color": _DEFAULT_MOOD_COLOR,
-            "topics": list(_DEFAULT_TOPICS),
+            "topics": [profile.topics[0]] if profile.topics else [],
         }, text
 
     # Use python-frontmatter for robust parsing (handles --- in body text)
@@ -401,10 +354,7 @@ def parse_reflection(raw: str) -> tuple[dict, str]:
 
 # Characters backslash-escaped in attacker-influenced source titles/names
 # before embedding them in the sources list. This is the subset of
-# CommonMark 6.1 (Backslash escapes) that can affect inline parsing:
-# link/image syntax ([ ] ( ) !), emphasis runs (* _), code spans (`),
-# HTML injection (< >), headings/ordered lists (# + - . at line start),
-# tables (|), raw HTML entities ({ }), and the escape itself (\).
+# CommonMark 6.1 (Backslash escapes) that can affect inline parsing.
 _SOURCE_MD_META_CHARS = r"\`*_{}[]()#+-.!|<>"
 _SOURCE_MD_ESCAPE_RE = re.compile("([" + re.escape(_SOURCE_MD_META_CHARS) + "])")
 
@@ -413,42 +363,23 @@ _SOURCE_MD_ESCAPE_RE = re.compile("([" + re.escape(_SOURCE_MD_META_CHARS) + "])"
 _MAX_SOURCE_URL_LEN = 2048
 
 # mood_color is interpolated into inline `style="background-color: …"`
-# attributes in three Hugo templates (archive, list, single). Without
-# validation, a hostile value such as
-#   red; } .entry-mood-strip::before { content: url(https://evil/beacon); } .x {
-# would break out of the declaration and inject CSS — a fetch primitive
-# under the current CSP (`style-src 'self' 'unsafe-inline'`). We validate
-# *structurally* rather than by denylist: if the value is not a plain hex
-# color literal it is dropped entirely.
+# attributes in Hugo templates. We validate structurally: if the value is
+# not a plain hex color literal it is dropped entirely.
 _MOOD_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 _DEFAULT_MOOD_COLOR = "#8B6914"
 
 # mood_score is a numeric frontmatter field rendered into the mood chart
 # data island as a JSON number. Range matches the persona prompt (1 heavy
-# → 10 light). Out-of-range or wrong-type values are coerced to the
-# midpoint default rather than raising.
+# → 10 light).
 _MOOD_SCORE_MIN = 1
 _MOOD_SCORE_MAX = 10
 _DEFAULT_MOOD_SCORE = 5
-
-# topics is rendered as a list of badges on each post card and drives
-# taxonomy. The allowed set is fixed by the persona prompt
-# (scripts/persona.py:116). Unknown entries are dropped rather than
-# substituted — if the whole list filters to empty, fall back to the
-# canonical "wildcard" catch-all.
-_ALLOWED_TOPICS = frozenset(("politics", "markets", "energy", "tech", "wildcard"))
-_DEFAULT_TOPICS: tuple[str, ...] = ("wildcard",)
 
 # description is rendered into <meta name="description">, og:description, and
 # twitter:description by layouts/partials/head.html, plus the JSON-LD
 # BlogPosting block. Hugo auto-escapes meta `content` attributes and
 # `jsonify` safely encodes JSON values, so HTML-escaping here would
-# double-escape; we only need to coerce to a string, collapse whitespace,
-# and bound the length. The full raw response has already passed
-# `_reject_dangerous_html`, which catches the actual attack vectors.
-# 160 chars is the conventional SEO sweet spot — slightly above the
-# 155-char target in the persona prompt so a perfectly-sized model
-# response isn't truncated mid-word.
+# double-escape; we only coerce, collapse whitespace, and bound the length.
 _MAX_DESCRIPTION_LEN = 160
 
 
@@ -458,11 +389,7 @@ def _escape_md_inline(text: str) -> str:
     Titles and source names come from attacker-influenced RSS feeds. Without
     escaping, a hostile title containing `](...)` could reshape the link
     target, `*` could break italic runs, and `<script>` would reach the
-    renderer as raw HTML. Apostrophes, em-dashes, quotes, and ampersands
-    are NOT in the metacharacter set — they pass through untouched.
-
-    Also collapses any internal whitespace — a newline in a title would
-    break the list-item boundary and leak following content into the body.
+    renderer as raw HTML.
     """
     if not text:
         return ""
@@ -471,15 +398,7 @@ def _escape_md_inline(text: str) -> str:
 
 
 def _validate_mood_color(value: object) -> str:
-    """Return value if it is a plain hex color literal, else the default.
-
-    Accepts ``#`` followed by 3-8 hex digits (covers ``#RGB``, ``#RGBA``,
-    ``#RRGGBB``, ``#RRGGBBAA`` plus the non-standard 5/7-digit lengths
-    that browsers ignore). Uses ``fullmatch`` so a trailing newline or
-    second color declaration cannot sneak past the anchors. Anything
-    that is not a string, or contains any character outside the hex
-    alphabet, is logged and replaced with ``_DEFAULT_MOOD_COLOR``.
-    """
+    """Return value if it is a plain hex color literal, else the default."""
     if isinstance(value, str) and _MOOD_COLOR_RE.fullmatch(value):
         return value
     logger.warning(
@@ -489,12 +408,9 @@ def _validate_mood_color(value: object) -> str:
 
 
 def _validate_mood_score(value: object) -> int:
-    """Return value if it is an int in ``[_MOOD_SCORE_MIN, _MOOD_SCORE_MAX]``.
+    """Return value if it is an int in [_MOOD_SCORE_MIN, _MOOD_SCORE_MAX].
 
-    Booleans are rejected even though ``isinstance(True, int)`` is True in
-    Python — a ``mood_score: true`` would otherwise be coerced to 1.
-    Floats, strings, and everything else fall back to the default with a
-    warning.
+    Booleans are rejected even though `isinstance(True, int)` is True.
     """
     if (
         isinstance(value, int)
@@ -508,31 +424,34 @@ def _validate_mood_score(value: object) -> int:
     return _DEFAULT_MOOD_SCORE
 
 
-def _validate_topics(value: object) -> list[str]:
-    """Filter ``value`` down to a list of allowed topic strings.
+def _validate_topics(value: object, profile: ReaderProfile) -> list[str]:
+    """Filter `value` down to a list of allowed topics for this profile.
 
-    Rules:
-    - ``value`` must be a list. Anything else → default.
-    - Each item must be a ``str`` in ``_ALLOWED_TOPICS``. Non-string items
-      and out-of-set strings are dropped and logged individually.
-    - Duplicates are de-duped in a single pass while preserving order so
-      the badge list matches the author's original ranking.
-    - If the filtered result is empty, fall back to ``_DEFAULT_TOPICS``.
+    The allowed set is `profile.topics`, in the profile registry. Unknown
+    items are dropped; if the whole list filters to empty, fall back to
+    the profile's first canonical topic.
     """
+    allowed = frozenset(profile.topics)
+    default: list[str] = [profile.topics[0]] if profile.topics else []
+
     if not isinstance(value, list):
         logger.warning(
-            f"Invalid topics {value!r} (not a list), falling back to {list(_DEFAULT_TOPICS)}"
+            f"[{profile.slug}] Invalid topics {value!r} (not a list), "
+            f"falling back to {default}"
         )
-        return list(_DEFAULT_TOPICS)
+        return list(default)
 
     seen: set[str] = set()
     filtered: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            logger.warning(f"Dropping non-string topic {item!r}")
+            logger.warning(f"[{profile.slug}] Dropping non-string topic {item!r}")
             continue
-        if item not in _ALLOWED_TOPICS:
-            logger.warning(f"Dropping unknown topic {item!r}")
+        if item not in allowed:
+            logger.warning(
+                f"[{profile.slug}] Dropping unknown topic {item!r} "
+                f"(allowed: {sorted(allowed)})"
+            )
             continue
         if item in seen:
             continue
@@ -541,20 +460,14 @@ def _validate_topics(value: object) -> list[str]:
 
     if not filtered:
         logger.warning(
-            f"All topics dropped, falling back to {list(_DEFAULT_TOPICS)}"
+            f"[{profile.slug}] All topics dropped, falling back to {default}"
         )
-        return list(_DEFAULT_TOPICS)
+        return list(default)
     return filtered
 
 
 def _first_sentence(text: str, window: int = 200) -> str:
-    """Return the first sentence of `text` (looking only at the first `window` chars).
-
-    Used as the fallback when the model omits or empties the description.
-    A "sentence" ends at the first ``. `` (period-space) inside the window;
-    if none is found, the whole window is returned. Newlines are collapsed
-    so a multi-line first paragraph still yields one clean string.
-    """
+    """Return the first sentence of `text` (looking only at the first `window` chars)."""
     if not text:
         return ""
     head = re.sub(r"\s+", " ", text.strip())[:window]
@@ -565,20 +478,7 @@ def _first_sentence(text: str, window: int = 200) -> str:
 
 
 def _validate_description(value: object, body: str = "") -> str:
-    """Return a safe meta-description string, falling back to the body if empty.
-
-    Rules:
-    - Non-strings → fall back to first sentence of `body` (or "" if none).
-    - Strip surrounding whitespace and collapse internal whitespace
-      (including newlines, which would break the meta `content` attr).
-    - Truncate to ``_MAX_DESCRIPTION_LEN`` chars.
-    - If the result is empty after stripping, try ``body``; failing that,
-      return "" and let the template fall back to the site description.
-
-    No HTML-escaping here — Hugo escapes meta `content` attributes and
-    ``jsonify`` escapes JSON values. The raw response has already passed
-    ``_reject_dangerous_html`` for the real attack vectors.
-    """
+    """Return a safe meta-description string, falling back to the body if empty."""
     candidate = value if isinstance(value, str) else ""
     candidate = re.sub(r"\s+", " ", candidate).strip()
     if not candidate:
@@ -587,22 +487,7 @@ def _validate_description(value: object, body: str = "") -> str:
 
 
 def _safe_source_url(url: str) -> str | None:
-    """Return the URL if it is safe to embed as a markdown link target.
-
-    Requirements:
-    - Length must be ≤ _MAX_SOURCE_URL_LEN (2048 bytes). Anything longer is
-      almost certainly an adversarial payload.
-    - Scheme must be http or https. Anything else (javascript:, data:,
-      file:, gopher:, mailto:, etc.) is rejected — caller emits the title
-      as plain text with no link.
-    - Must have a hostname.
-    - Must not contain `<`, `>`, or whitespace. We angle-wrap link targets
-      (`[text](<url>)`) so that balanced parens in the URL do not confuse
-      the parser; angle-wrap requires `<`/`>`/whitespace to be absent
-      inside the target.
-
-    Returns None on any rejection. Caller is responsible for logging.
-    """
+    """Return the URL if it is safe to embed as a markdown link target."""
     if not url:
         return None
     if len(url) > _MAX_SOURCE_URL_LEN:
@@ -623,14 +508,9 @@ def _safe_source_url(url: str) -> str | None:
 def format_sources(news: dict[str, list[Article]]) -> str:
     """Format the articles read into a sources list for the post footer.
 
-    Emits a Hugo shortcode call rather than raw HTML. This keeps the markdown
-    source free of HTML so that Hugo's markup.goldmark.renderer.unsafe can
-    stay disabled — the shortcode template renders the <details>/<summary>
-    wrapper on the Hugo side where it is trusted.
-
-    All attacker-controlled text (article titles, source names) is
-    backslash-escaped before interpolation. URLs are scheme-validated;
-    anything non-http(s) is rendered as plain text without a link.
+    Emits a Hugo shortcode call rather than raw HTML. All
+    attacker-controlled text is backslash-escaped before interpolation;
+    URLs are scheme-validated.
     """
     lines = ["\n\n---\n", "{{< sources >}}"]
     for category, articles in news.items():
@@ -650,24 +530,31 @@ def format_sources(news: dict[str, list[Article]]) -> str:
     return "\n".join(lines)
 
 
-def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
-    """Save the entry as a Hugo markdown file."""
+def save_entry(
+    profile: ReaderProfile,
+    frontmatter: dict,
+    body: str,
+    sources_md: str = "",
+) -> Path:
+    """Save the entry as a Hugo markdown file under content/<slug>/."""
     today = datetime.now(ZoneInfo(TIMEZONE))
     date_str = today.strftime("%Y-%m-%d")
     time_str = today.isoformat()
 
     # Build Hugo frontmatter. Every attacker-influenced field is run through
     # a structural validator at this boundary — the `.md` file on disk never
-    # contains an un-validated value, so downstream template and JS contexts
-    # are safe by construction.
+    # contains an un-validated value.
     fm = {
-        "title": frontmatter.get("title", f"Entry for {today.strftime('%B %-d, %Y')}"),
+        "title": frontmatter.get(
+            "title", f"Entry for {today.strftime('%B %-d, %Y')}"
+        ),
         "date": time_str,
         "model": MODEL_DISPLAY,
+        "profile": profile.slug,
         "description": _validate_description(frontmatter.get("description"), body),
         "mood_color": _validate_mood_color(frontmatter.get("mood_color")),
         "mood_score": _validate_mood_score(frontmatter.get("mood_score")),
-        "topics": _validate_topics(frontmatter.get("topics")),
+        "topics": _validate_topics(frontmatter.get("topics"), profile),
         "draft": False,
     }
 
@@ -676,29 +563,31 @@ def save_entry(frontmatter: dict, body: str, sources_md: str = "") -> Path:
     full_body = body + sources_md if sources_md else body
     content = "---\n" + _yaml.dump(fm, default_flow_style=False) + "---\n\n" + full_body
 
-    filepath = CONTENT_DIR / f"{date_str}.md"
+    section = profile_content_dir(profile.slug)
+    filepath = section / f"{date_str}.md"
     filepath.write_text(content)
-    logger.info(f"Saved entry to {filepath}")
+    logger.info(f"[{profile.slug}] Saved entry to {filepath}")
 
     return filepath
 
 
-def save_raw_response(raw: str):
-    """Save the raw API response for debugging."""
+def save_raw_response(slug: str, raw: str) -> None:
+    """Save the raw claude CLI response for debugging."""
     today = datetime.now().strftime("%Y-%m-%d")
-    raw_path = DATA_DIR / f"{today}-raw.md"
+    raw_path = raw_response_path(today, slug)
     raw_path.write_text(raw)
-    logger.info(f"Saved raw response to {raw_path}")
+    logger.info(f"[{slug}] Saved raw response to {raw_path}")
 
 
-def validate_build(date_str: str) -> bool:
-    """Verify Hugo output after build: key files exist and are non-empty."""
+def validate_build(date_str: str, shipped_slugs: list[str]) -> bool:
+    """Verify Hugo output: site index + feed + per-profile entry pages."""
     public_dir = PROJECT_ROOT / "public"
-    checks = {
+    checks: dict[str, Path] = {
         "index": public_dir / "index.html",
-        "post": public_dir / "posts" / date_str / "index.html",
         "feed": public_dir / "feed.xml",
     }
+    for slug in shipped_slugs:
+        checks[f"{slug} entry"] = public_dir / slug / date_str / "index.html"
 
     all_ok = True
     for name, path in checks.items():
@@ -714,7 +603,7 @@ def validate_build(date_str: str) -> bool:
     return all_ok
 
 
-def build_site(date_str: str) -> bool:
+def build_site(date_str: str, shipped_slugs: list[str]) -> bool:
     """Run Hugo to build the site and validate output."""
     try:
         result = subprocess.run(
@@ -730,7 +619,7 @@ def build_site(date_str: str) -> bool:
 
         logger.info("Hugo build succeeded")
 
-        if not validate_build(date_str):
+        if not validate_build(date_str, shipped_slugs):
             logger.error("Hugo build output validation failed — not committing")
             return False
 
@@ -755,16 +644,14 @@ def _run_git(*args, timeout: int = 30) -> subprocess.CompletedProcess:
     )
 
 
-def git_commit_and_push(filepath: Path) -> bool:
-    """Commit the new entry and push to GitHub.
-
-    Pulls with rebase before pushing to handle remote changes.
-    Retries push once if it fails due to remote updates during the operation.
-    """
+def git_commit_and_push(shipped_slugs: list[str]) -> bool:
+    """Stage `content/`, commit, and push all profiles that shipped today."""
     today = datetime.now().strftime("%Y-%m-%d")
+    slug_tag = ", ".join(shipped_slugs) if shipped_slugs else "no profiles"
+    commit_msg = f"entry: {today} ({slug_tag})"
 
     try:
-        _run_git("add", "content/posts/")
+        _run_git("add", "content/")
         # Check if there are staged changes before committing
         status = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
@@ -772,7 +659,7 @@ def git_commit_and_push(filepath: Path) -> bool:
             capture_output=True,
         )
         if status.returncode != 0:
-            _run_git("commit", "-m", f"entry: {today}")
+            _run_git("commit", "-m", commit_msg)
         else:
             logger.info("Nothing to commit — commit already exists, proceeding to push")
     except subprocess.CalledProcessError as e:
@@ -785,10 +672,7 @@ def git_commit_and_push(filepath: Path) -> bool:
     # Pull with rebase then push, with retry for race conditions
     for attempt in range(1, GIT_PUSH_RETRIES + 1):
         try:
-            # Pull remote changes and rebase our commit on top
             try:
-                # Name the remote/branch explicitly so the pull works even if
-                # the branch has no upstream tracking configured
                 result = _run_git(
                     "pull", "--rebase", "--autostash", "origin", "main", timeout=30
                 )
@@ -801,13 +685,11 @@ def git_commit_and_push(filepath: Path) -> bool:
                         f"Git rebase conflict — aborting rebase and failing. "
                         f"Manual resolution needed: {stderr}"
                     )
-                    # Abort the rebase to leave the repo in a clean state
                     try:
                         _run_git("rebase", "--abort")
                     except subprocess.CalledProcessError:
                         pass
                     return False
-                # Other pull errors (e.g., no remote configured)
                 logger.warning(f"Git pull failed (attempt {attempt}): {stderr}")
                 if attempt >= GIT_PUSH_RETRIES:
                     return False
@@ -825,7 +707,9 @@ def git_commit_and_push(filepath: Path) -> bool:
                     f"will retry with pull --rebase"
                 )
                 if attempt >= GIT_PUSH_RETRIES:
-                    logger.error(f"Push failed after {GIT_PUSH_RETRIES} attempts: {stderr}")
+                    logger.error(
+                        f"Push failed after {GIT_PUSH_RETRIES} attempts: {stderr}"
+                    )
                     return False
                 continue
             logger.error(f"Git push failed: {stderr}")
@@ -837,8 +721,8 @@ def git_commit_and_push(filepath: Path) -> bool:
     return False
 
 
-def notify_failure(error: str):
-    """Send a notification on failure. Writes to a failure log for now."""
+def notify_failure(error: str) -> None:
+    """Append a failure line to logs/failures.log for the health check."""
     failure_path = LOG_DIR / "failures.log"
     timestamp = datetime.now().isoformat()
     with open(failure_path, "a") as f:
@@ -846,129 +730,275 @@ def notify_failure(error: str):
     logger.error(f"FAILURE: {error}")
 
 
-def main():
-    """Main daily generation pipeline.
+# --- Per-profile stage runners ------------------------------------------
 
-    Uses a state file (data/YYYY-MM-DD-state.json) to track progress through
-    pipeline stages: fetched → generated → saved → built → pushed.
-    Safe to re-run: resumes from the last completed stage.
+def _stage_index(stage: str) -> int:
+    """Return the position of `stage` in ALL_STAGES. Raises on unknown."""
+    if stage not in ALL_STAGES:
+        raise ValueError(
+            f"Unknown pipeline stage {stage!r}. Known: {list(ALL_STAGES)}"
+        )
+    return ALL_STAGES.index(stage)
+
+
+def run_profile_pipeline(
+    profile: ReaderProfile,
+    today: str,
+    state: dict,
+    stop_at_stage: str,
+) -> bool:
+    """Advance one profile through fetched -> generated -> saved.
+
+    Returns True if the profile reached the `saved` stage (or stopped
+    earlier because `stop_at_stage` said so and every requested stage
+    completed). Any failure at any stage is logged and returns False;
+    the caller continues with the remaining profiles.
     """
+    slug = profile.slug
+    stop_idx = _stage_index(stop_at_stage)
+
+    news: dict[str, list[Article]] | None = None
+    news_content = ""
+
+    # Stage: fetched
+    if not profile_reached(state, slug, "fetched"):
+        logger.info(f"[{slug}] Step: fetching news...")
+        try:
+            news = fetch_all_news(profile.feeds, profile_label=slug)
+            news_content = format_news_for_prompt(news)
+            if not news_content.strip():
+                raise RuntimeError("no news content after screening")
+            logger.info(
+                f"[{slug}] Fetched {len(news_content)} chars of news content"
+            )
+            save_news_cache(today, slug, news)
+            mark_profile_stage(state, slug, "fetched")
+            save_state(today, state)
+        except (AllFeedsFailedError, Exception) as e:
+            notify_failure(f"[{slug}] News fetch failed: {e}")
+            return False
+    else:
+        logger.info(f"[{slug}] Fetch already done, loading from cache.")
+
+    if stop_idx <= _stage_index("fetched"):
+        return True
+
+    # Ensure `news` is loaded before generation
+    if news is None:
+        news = load_news_cache(today, slug)
+        if news is None:
+            logger.warning(
+                f"[{slug}] News cache missing on resume — re-fetching"
+            )
+            try:
+                news = fetch_all_news(profile.feeds, profile_label=slug)
+                save_news_cache(today, slug, news)
+            except Exception as e:
+                notify_failure(f"[{slug}] News re-fetch on resume failed: {e}")
+                return False
+        news_content = format_news_for_prompt(news)
+
+    # Stage: generated
+    raw_response: str | None = None
+    if not profile_reached(state, slug, "generated"):
+        logger.info(f"[{slug}] Step: generating reflection...")
+        previous_entries = get_previous_entries(slug)
+        news_history = get_previous_news(slug, today)
+        logger.info(
+            f"[{slug}] Loaded {len(news_history)} chars of news history"
+        )
+        try:
+            raw_response = generate_reflection(
+                profile, news_content, previous_entries, news_history
+            )
+            save_raw_response(slug, raw_response)
+            mark_profile_stage(state, slug, "generated")
+            save_state(today, state)
+        except Exception as e:
+            notify_failure(f"[{slug}] Claude CLI call failed: {e}")
+            return False
+    else:
+        logger.info(f"[{slug}] Generate already done, skipping.")
+
+    if stop_idx <= _stage_index("generated"):
+        return True
+
+    # Stage: saved
+    if not profile_reached(state, slug, "saved"):
+        logger.info(f"[{slug}] Step: parsing and saving entry...")
+        if raw_response is None:
+            raw_path = raw_response_path(today, slug)
+            if not raw_path.exists():
+                notify_failure(
+                    f"[{slug}] Cannot resume: raw response file missing at {raw_path}"
+                )
+                return False
+            raw_response = raw_path.read_text()
+
+        try:
+            frontmatter, body = parse_reflection(raw_response, profile)
+            sources_md = format_sources(news)
+            save_entry(profile, frontmatter, body, sources_md)
+            mark_profile_stage(state, slug, "saved")
+            save_state(today, state)
+        except Exception as e:
+            notify_failure(f"[{slug}] Failed to save entry: {e}")
+            return False
+    else:
+        logger.info(f"[{slug}] Save already done, skipping.")
+
+    return True
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse the CLI. Default (no args) is a full run over every profile."""
+    parser = argparse.ArgumentParser(
+        description="Run the Claude's Daily Digest pipeline."
+    )
+    parser.add_argument(
+        "--profiles",
+        default="",
+        help=(
+            "comma-separated subset of profile slugs to run "
+            f"(default: all — {', '.join(all_profile_slugs())})"
+        ),
+    )
+    parser.add_argument(
+        "--until",
+        default="pushed",
+        choices=list(ALL_STAGES),
+        help="stop after this stage (default: pushed, i.e. full run)",
+    )
+    return parser.parse_args()
+
+
+def _select_profiles(subset: str) -> list[ReaderProfile]:
+    """Resolve --profiles to a list, keeping registry order."""
+    if not subset.strip():
+        return list(READER_PROFILES.values())
+    requested = [s.strip() for s in subset.split(",") if s.strip()]
+    unknown = [s for s in requested if s not in READER_PROFILES]
+    if unknown:
+        raise SystemExit(
+            f"Unknown profile(s) in --profiles: {unknown}. "
+            f"Known: {list(READER_PROFILES.keys())}"
+        )
+    return [READER_PROFILES[s] for s in requested]
+
+
+def main() -> int:
+    """Main daily generation pipeline."""
     logger.info("=" * 60)
     logger.info("Claude's Daily Digest — Daily Generation")
     logger.info("=" * 60)
+
+    args = _parse_args()
+
+    # Startup validation: the Hugo config must know about the same profiles
+    # as the Python registry, in the same order, or nav tabs and entry
+    # sections will diverge silently.
+    try:
+        validate_config_matches_registry()
+    except (ProfileConfigMismatch, FileNotFoundError) as e:
+        notify_failure(f"Startup validation failed: {e}")
+        return 2
 
     ensure_dirs()
 
     today = datetime.now().strftime("%Y-%m-%d")
     state = load_state(today)
-    current_stage = state.get("stage", "")
+    if is_legacy_complete(state):
+        logger.info(
+            f"State for {today} is in the legacy single-stage shape — "
+            f"treating the day as already complete. Skipping."
+        )
+        return 0
 
-    # Already fully complete
-    if current_stage == "pushed":
-        logger.info(f"Entry for {today} already published. Skipping.")
-        return
+    profiles = _select_profiles(args.profiles)
+    stop_at_stage = args.until
+    stop_idx = _stage_index(stop_at_stage)
 
-    if current_stage:
-        logger.info(f"Resuming from stage '{current_stage}' for {today}")
-
-    # Determine which stage index we've completed (-1 = none)
-    completed_idx = (
-        PIPELINE_STAGES.index(current_stage) if current_stage in PIPELINE_STAGES else -1
+    logger.info(
+        f"Running {len(profiles)} profile(s): "
+        f"{[p.slug for p in profiles]} through stage '{stop_at_stage}'"
     )
 
-    # Stage 1: Fetch news
-    if completed_idx < 0:
-        logger.info("Step 1: Fetching news...")
-        try:
-            news = fetch_all_news()
-            news_content = format_news_for_prompt(news)
-            if not news_content.strip():
-                notify_failure("No news content fetched from any source")
-                return
-            logger.info(f"Fetched {len(news_content)} chars of news content")
-            save_news_cache(today, news)
-            save_state(today, "fetched")
-        except Exception as e:
-            notify_failure(f"News fetch failed: {e}")
-            return
-    else:
-        logger.info("Step 1: Fetch — already done, loading from cache.")
-        news = load_news_cache(today)
-        if news is not None:
-            news_content = format_news_for_prompt(news)
-        else:
-            logger.warning("News cache missing — re-fetching")
-            try:
-                news = fetch_all_news()
-                news_content = format_news_for_prompt(news)
-                save_news_cache(today, news)
-            except Exception as e:
-                notify_failure(f"News re-fetch on resume failed: {e}")
-                return
+    # --- Per-profile stages -------------------------------------------------
+    reached_target: list[str] = []  # profiles that reached stop_at_stage
+    saved_slugs: list[str] = []     # profiles that reached the `saved` stage
+    for profile in profiles:
+        ok = run_profile_pipeline(profile, today, state, stop_at_stage)
+        if ok:
+            reached_target.append(profile.slug)
+        if profile_reached(state, profile.slug, "saved"):
+            saved_slugs.append(profile.slug)
 
-    # Stage 2: Generate reflection
-    if completed_idx < 1:
-        logger.info("Step 2: Loading previous entries and news history...")
-        previous_entries = get_previous_entries()
-        news_history = get_previous_news(today)
-        logger.info(f"Loaded {len(news_history)} chars of news history")
+    # If the caller stopped before "saved", the run's success signal is
+    # whether ANY profile reached the requested stage. If they asked for
+    # "saved" or beyond, we insist that at least one profile shipped;
+    # otherwise the day is a failure.
+    if stop_idx < _stage_index("saved"):
+        if not reached_target:
+            notify_failure(
+                f"No profiles reached '{stop_at_stage}' — the day did not ship"
+            )
+            return 1
+        logger.info(
+            f"Stopping at --until {stop_at_stage}. "
+            f"Profiles that reached this stage: {reached_target}"
+        )
+        return 0
 
-        logger.info("Step 3: Generating reflection...")
-        try:
-            raw_response = generate_reflection(news_content, previous_entries, news_history)
-            save_raw_response(raw_response)
-            save_state(today, "generated")
-        except Exception as e:
-            notify_failure(f"Claude API call failed: {e}")
-            return
-    else:
-        logger.info("Step 2-3: Generate — already done, skipping.")
-        raw_response = None
+    if not saved_slugs:
+        notify_failure("No profiles reached 'saved' — the day did not ship")
+        return 1
 
-    # Stage 3: Parse and save entry
-    if completed_idx < 2:
-        logger.info("Step 4: Parsing and saving entry...")
+    # If the caller stopped at "saved" exactly, we are done before build/push.
+    if stop_idx < _stage_index("built"):
+        logger.info(
+            f"Stopping at --until {stop_at_stage}. "
+            f"Profiles saved today: {saved_slugs}"
+        )
+        return 0
 
-        # If resuming after generation, load raw response from disk
-        if raw_response is None:
-            raw_path = DATA_DIR / f"{today}-raw.md"
-            if not raw_path.exists():
-                notify_failure("Cannot resume: raw response file missing")
-                return
-            raw_response = raw_path.read_text()
+    # --- Shared stages: build + push ---------------------------------------
+    # Build over EVERY profile that reached "saved" today, not just the
+    # subset the current run touched, so a resumed session finishes the
+    # site with every desk that has landed so far.
+    all_shipped_today = [
+        slug for slug in READER_PROFILES.keys()
+        if profile_reached(state, slug, "saved")
+    ]
 
-        try:
-            frontmatter, body = parse_reflection(raw_response)
-            sources_md = format_sources(news)
-            filepath = save_entry(frontmatter, body, sources_md)
-            save_state(today, "saved")
-        except Exception as e:
-            notify_failure(f"Failed to save entry: {e}")
-            return
-    else:
-        logger.info("Step 4: Save — already done, skipping.")
-        filepath = CONTENT_DIR / f"{today}.md"
-
-    # Stage 4: Build site
-    if completed_idx < 3:
-        logger.info("Step 5: Building site...")
-        if not build_site(today):
+    if not state.get("built"):
+        logger.info(f"Step: building site over {all_shipped_today}...")
+        if not build_site(today, all_shipped_today):
             notify_failure("Hugo build failed")
-            return
-        save_state(today, "built")
+            return 1
+        state["built"] = True
+        save_state(today, state)
     else:
-        logger.info("Step 5: Build — already done, skipping.")
+        logger.info("Build already done, skipping.")
 
-    # Stage 5: Commit and push
-    if completed_idx < 4:
-        logger.info("Step 6: Committing and pushing...")
-        if not git_commit_and_push(filepath):
+    if stop_idx < _stage_index("pushed"):
+        logger.info(
+            f"Stopping at --until {stop_at_stage}. Site built, not pushed."
+        )
+        return 0
+
+    if not state.get("pushed"):
+        logger.info(f"Step: committing and pushing {all_shipped_today}...")
+        if not git_commit_and_push(all_shipped_today):
             notify_failure("Git push failed")
-            return
-        save_state(today, "pushed")
+            return 1
+        state["pushed"] = True
+        save_state(today, state)
+    else:
+        logger.info(f"Entry for {today} already pushed. Nothing to do.")
 
     logger.info("Daily generation complete!")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

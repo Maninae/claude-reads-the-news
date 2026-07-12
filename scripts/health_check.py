@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Health check script for Claude's Daily Digest.
+"""Health check for Claude's Daily Digest.
 
-Reports:
-- When the last successful post was published
-- Any failures in the last 7 days
-- RSS feed health summary (from feed-health.json)
+Reports, in one pass:
+- Freshest entry across every reader profile.
+- Per-profile staleness so a single dead desk does not hide behind
+  another profile shipping every morning.
+- Failures in the last 7 days from `logs/failures.log`.
+- RSS feed health summary from `data/feed-health.json`.
 """
 
 import json
@@ -15,36 +17,67 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import CONTENT_DIR, FEED_HEALTH_PATH, LOG_DIR
+from profiles import READER_PROFILES
 
 FAILURES_PATH = LOG_DIR / "failures.log"
 
+# A profile with no new entry in this many days trips a WARN; more than
+# TWO days trips a FAIL. Matches the site-wide freshness thresholds.
+STALE_WARN_DAYS = 1
+STALE_FAIL_DAYS = 2
 
-def check_last_post() -> tuple[str | None, int]:
-    """Find the most recent post and how many days ago it was.
 
-    Returns (date_string, days_ago). Returns (None, -1) if no posts found.
+def _newest_entry_in(section: Path) -> tuple[str | None, int]:
+    """Return (date_str, days_ago) for the newest .md in `section`.
+
+    Returns (None, -1) if the section has no valid entries.
     """
-    if not CONTENT_DIR.exists():
+    if not section.exists():
         return None, -1
-
-    posts = sorted(CONTENT_DIR.glob("*.md"), reverse=True)
+    posts = sorted(section.glob("*.md"), reverse=True)
     if not posts:
         return None, -1
-
     date_str = posts[0].stem  # filename is YYYY-MM-DD.md
     try:
         post_date = datetime.strptime(date_str, "%Y-%m-%d")
-        days_ago = (datetime.now() - post_date).days
-        return date_str, days_ago
+        return date_str, (datetime.now() - post_date).days
     except ValueError:
         return date_str, -1
+
+
+def check_last_post_by_profile() -> dict[str, tuple[str | None, int]]:
+    """Freshest entry per profile.
+
+    Returns {slug: (date_str, days_ago)}. days_ago is -1 when the section
+    is missing or its most recent filename is not a parseable date.
+    """
+    return {
+        slug: _newest_entry_in(CONTENT_DIR / slug)
+        for slug in READER_PROFILES.keys()
+    }
+
+
+def check_last_post_overall() -> tuple[str | None, int]:
+    """Freshest entry across every profile section.
+
+    The site is "live" as long as at least one desk ships each morning,
+    so the overall freshness signal is the min of per-profile freshness.
+    """
+    best_date: str | None = None
+    best_days = -1
+    for _, (date_str, days_ago) in check_last_post_by_profile().items():
+        if date_str is None:
+            continue
+        if best_date is None or days_ago < best_days:
+            best_date = date_str
+            best_days = days_ago
+    return best_date, best_days
 
 
 def check_recent_failures(days: int = 7) -> list[str]:
     """Return failure log lines from the last N days."""
     if not FAILURES_PATH.exists():
         return []
-
     cutoff = datetime.now() - timedelta(days=days)
     recent = []
     for line in FAILURES_PATH.read_text().splitlines():
@@ -77,6 +110,21 @@ def check_feed_health() -> dict | None:
         return None
 
 
+def _describe_freshness(date_str: str | None, days_ago: int) -> tuple[str, bool]:
+    """Return (message, ok_flag) describing a freshness sample."""
+    if date_str is None:
+        return ("no posts found", False)
+    if days_ago < 0:
+        return (f"last post: {date_str} (date unparseable)", False)
+    if days_ago == 0:
+        return (f"last post: {date_str} (today)", True)
+    if days_ago == 1:
+        return (f"last post: {date_str} (yesterday)", True)
+    if days_ago <= STALE_FAIL_DAYS:
+        return (f"last post: {date_str} ({days_ago} days ago)", False)
+    return (f"last post: {date_str} ({days_ago} days ago)", False)
+
+
 def main():
     """Run all health checks and print a report."""
     print("=" * 50)
@@ -86,45 +134,48 @@ def main():
 
     all_ok = True
 
-    # 1. Last post
-    last_date, days_ago = check_last_post()
-    if last_date is None:
-        print("[WARN] No posts found")
-        all_ok = False
-    elif days_ago == 0:
-        print(f"[OK]   Last post: {last_date} (today)")
-    elif days_ago == 1:
-        print(f"[OK]   Last post: {last_date} (yesterday)")
-    elif days_ago <= 2:
-        print(f"[WARN] Last post: {last_date} ({days_ago} days ago)")
-        all_ok = False
-    else:
-        print(f"[FAIL] Last post: {last_date} ({days_ago} days ago)")
+    # 1. Overall freshness (min days_ago across all profiles).
+    overall_date, overall_days = check_last_post_overall()
+    msg, ok = _describe_freshness(overall_date, overall_days)
+    status = "OK" if ok else ("WARN" if overall_days == STALE_WARN_DAYS + 1 else "FAIL")
+    print(f"[{status:4s}] site: {msg}")
+    if not ok:
         all_ok = False
 
-    # 2. Recent failures
+    # 2. Per-profile freshness.
+    per_profile = check_last_post_by_profile()
+    for slug in READER_PROFILES.keys():
+        date_str, days_ago = per_profile[slug]
+        msg, ok = _describe_freshness(date_str, days_ago)
+        if ok:
+            print(f"[OK  ] {slug}: {msg}")
+        else:
+            status = "WARN" if 0 <= days_ago <= STALE_WARN_DAYS + 1 else "FAIL"
+            print(f"[{status:4s}] {slug}: {msg}")
+            all_ok = False
+
+    # 3. Recent failures
     failures = check_recent_failures(days=7)
     if failures:
         print(f"[WARN] {len(failures)} failure(s) in last 7 days:")
-        for f in failures[-5:]:  # Show last 5
+        for f in failures[-5:]:
             print(f"       {f}")
         if len(failures) > 5:
             print(f"       ... and {len(failures) - 5} more")
         all_ok = False
     else:
-        print("[OK]   No failures in last 7 days")
+        print("[OK  ] no failures in last 7 days")
 
-    # 3. Feed health
+    # 4. Feed health
     health = check_feed_health()
     if health is None:
-        print("[INFO] No feed health data available (run generate first)")
+        print("[INFO] no feed health data available (run generate first)")
     else:
         total = len(health)
         recent_failures = []
         for url, record in health.items():
             last_failure = record.get("last_failure")
             last_success = record.get("last_success")
-            # Flag feeds whose last check was a failure
             if last_failure and (not last_success or last_failure > last_success):
                 recent_failures.append((url, record.get("last_error", "unknown")))
 
@@ -136,7 +187,7 @@ def main():
                 print(f"       ... and {len(recent_failures) - 5} more")
             all_ok = False
         else:
-            print(f"[OK]   All {total} tracked feeds healthy")
+            print(f"[OK  ] all {total} tracked feeds healthy")
 
     print()
     if all_ok:
