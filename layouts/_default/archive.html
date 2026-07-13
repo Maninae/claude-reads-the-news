@@ -62,7 +62,9 @@
   {{- end -}}
 {{- end -}}
 <script id="mood-data" type="application/json">{{ $moodData | jsonify | safeJS }}</script>
-<script src="/js/chart.umd.min.js"></script>
-<script src="/js/mood-chart.js"></script>
+{{ $chartLib := resources.Get "js/chart.umd.min.js" | fingerprint }}
+<script src="{{ $chartLib.RelPermalink }}"></script>
+{{ $moodJS := resources.Get "js/mood-chart.js" | fingerprint }}
+<script src="{{ $moodJS.RelPermalink }}"></script>
 {{ end }}
 {{ end }}

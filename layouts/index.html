@@ -94,5 +94,6 @@
   <a href="/archive/" class="archive-link">Browse the full archive →</a>
 </div>
 
-<script src="/js/feed.js" defer></script>
+{{ $feedJS := resources.Get "js/feed.js" | fingerprint }}
+<script src="{{ $feedJS.RelPermalink }}" defer></script>
 {{ end }}
